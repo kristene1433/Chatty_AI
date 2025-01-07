@@ -1,0 +1,6 @@
+# Example .gitignore
+venv/
+*.pyc
+__pycache__/
+.env
+*.log
