@@ -1,30 +1,31 @@
 import os
-import time
-import random
-from datetime import datetime
-from dotenv import load_dotenv
-import openai
-import tweepy
-import requests
-import traceback
 import glob
 import json
-from pymongo import MongoClient
-from pymongo.server_api import ServerApi
-import logging
-from logging.handlers import RotatingFileHandler
-import signal
-import sys
-import schedule
-from textblob import TextBlob
-import nltk
+import random
 import numpy as np
-import re  # for regex if partial matches are desired
+import requests
+import traceback
+import schedule
+import openai
+import tweepy
+import nltk
+import re
+from textblob import TextBlob
+from datetime import datetime
+
+# ──────────────────────────────────────────────────────────────────────────
+# Import your logger, DB collections, env vars, etc. from config_and_setup
+# ──────────────────────────────────────────────────────────────────────────
+from config_and_setup import (
+    logger, db, mentions_collection, memory_collection, 
+    embeddings_collection, posted_tweets_collection, chatty_collection,
+    API_KEY, API_SECRET, ACCESS_TOKEN, ACCESS_SECRET, BEARER_TOKEN,
+    IMAGE_DIR, PROMPT_FOLDER
+)
 
 # Global in-memory caches
 EMBEDDING_CACHE = {}   # key: text, value: embedding list
 MODERATION_CACHE = {}  # key: text, value: Boolean (True => safe, False => flagged)
-
 
 # Ensure 'punkt' is downloaded for TextBlob
 try:
@@ -32,136 +33,30 @@ try:
 except LookupError:
     nltk.download('punkt')
 
-# ──────────────────────────────────────────────────────────────────────────
-# Configuration and Setup
-# ──────────────────────────────────────────────────────────────────────────
-
-load_dotenv()  # Load environment variables from .env if present
-
-LOG_FILE = os.getenv("LOG_FILE", "application.log")
-handler = RotatingFileHandler(
-    LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8"
-)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
-    handlers=[
-        handler,
-        logging.StreamHandler(sys.stdout)
-    ]
-)
-logger = logging.getLogger(__name__)
-
-def signal_handler(sig, frame):
-    logger.info("Shutting down gracefully...")
-    try:
-        mongo_client.close()
-    except Exception as e:
-        logger.error(f"Error closing MongoDB connection: {e}", exc_info=True)
-    sys.exit(0)
-
-signal.signal(signal.SIGINT, signal_handler)
-signal.signal(signal.SIGTERM, signal_handler)
-
-required_env_vars = [
-    "TWITTER_API_KEY",
-    "TWITTER_API_SECRET",
-    "TWITTER_OAUTH1_ACCESS_TOKEN",
-    "TWITTER_OAUTH1_ACCESS_SECRET",
-    "TWITTER_BEARER_TOKEN",
-    "OPENAI_API_KEY",
-    "MONGODB_URI",
-    "LOG_FILE"
-]
-
-missing_vars = [var for var in required_env_vars if not os.getenv(var)]
-if missing_vars:
-    logger.critical(f"Missing required environment variables: {', '.join(missing_vars)}")
-    sys.exit(1)
-
-# Masked logging of env var presence
-for var in required_env_vars:
-    val = os.getenv(var)
-    if val:
-        if var in ["TWITTER_API_SECRET", "TWITTER_OAUTH1_ACCESS_SECRET"]:
-            logger.info(f"{var} is loaded.")
-        else:
-            masked = "*" * (len(val) - 4) + val[-4:] if len(val) > 4 else "*" * len(val)
-            logger.info(f"{var} is loaded. Value: {masked}")
-    else:
-        logger.warning(f"{var} is NOT set.")
-
-API_KEY = os.getenv("TWITTER_API_KEY")
-API_SECRET = os.getenv("TWITTER_API_SECRET")
-ACCESS_TOKEN = os.getenv("TWITTER_OAUTH1_ACCESS_TOKEN")
-ACCESS_SECRET = os.getenv("TWITTER_OAUTH1_ACCESS_SECRET")
-BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN")
-MONGODB_URI = os.getenv("MONGODB_URI")
-
+# Set your OpenAI API key
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
-IMAGE_DIR = "generated_images"
-PROMPT_FOLDER = "prompts"
-os.makedirs(IMAGE_DIR, exist_ok=True)
-os.makedirs(PROMPT_FOLDER, exist_ok=True)
-
 # ──────────────────────────────────────────────────────────────────────────
-# MongoDB Setup
+# HELPER: Load JSON Arrays (Themes, Prompts)
 # ──────────────────────────────────────────────────────────────────────────
 
-try:
-    mongo_client = MongoClient(MONGODB_URI, server_api=ServerApi("1"))
-    db = mongo_client["TwitterBotProject"]
+def load_list_from_json(filepath):
+    with open(filepath, "r", encoding="utf-8") as f:
+        return json.load(f)
 
-    mentions_collection = db["processed_mentions"]
-    mentions_collection.create_index("tweet_id", unique=True)
+# Here we define our data folder
+DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 
-    memory_collection = db["user_memory"]
-    memory_collection.create_index([("user_id", 1), ("timestamp", -1)])
+# Now point to the two JSON files inside data/
+THEMES_FILE = os.path.join(DATA_DIR, "themes.json")
+PROMPTS_FILE = os.path.join(DATA_DIR, "hardcoded_prompts.json")
 
-    embeddings_collection = db["conversation_embeddings"]
-    embeddings_collection.create_index("embedding")
-
-    posted_tweets_collection = db["posted_tweets"]
-    posted_tweets_collection.create_index("timestamp")
-
-    chatty_collection = db["chatty_instructions"]
-    chatty_collection.create_index("name", unique=True)
-    logger.info("chatty_instructions collection is ready.")
-
-    logger.info("Connected to MongoDB Atlas successfully.")
-except Exception as e:
-    logger.error(f"Error connecting to MongoDB: {e}")
-    traceback.print_exc()
-    sys.exit(1)
+# Load them in place of large Python lists
+themes_list = load_list_from_json(THEMES_FILE)         # replaces old themes_list
+HARDCODED_PROMPTS = load_list_from_json(PROMPTS_FILE)  # replaces old HARDCODED_PROMPTS
 
 # ──────────────────────────────────────────────────────────────────────────
-# Authenticate Twitter Client (v2)
-# ──────────────────────────────────────────────────────────────────────────
-
-def authenticate_twitter_client():
-    try:
-        client = tweepy.Client(
-            consumer_key=API_KEY,
-            consumer_secret=API_SECRET,
-            access_token=ACCESS_TOKEN,
-            access_token_secret=ACCESS_SECRET,
-            bearer_token=BEARER_TOKEN,
-            wait_on_rate_limit=True
-        )
-        user = client.get_me()
-        if user and user.data:
-            logger.info(f"Authenticated as @{user.data.username} (User ID: {user.data.id})")
-        else:
-            logger.error("Authentication failed: Unable to fetch user data.")
-            sys.exit(1)
-        return client
-    except Exception as e:
-        logger.error(f"Error authenticating Twitter client: {e}", exc_info=True)
-        sys.exit(1)
-
-# ──────────────────────────────────────────────────────────────────────────
-# Chatty_AI: Personality Expansion
+# SYSTEM_PROMPTS, other existing code, etc.
 # ──────────────────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPTS = [
@@ -187,7 +82,74 @@ def select_system_prompt():
     return random.choice(SYSTEM_PROMPTS)
 
 # ──────────────────────────────────────────────────────────────────────────
-# Loading Extra Prompts from Files
+# Load Persona / Riddle / Story / Challenge data from subfolders
+# ──────────────────────────────────────────────────────────────────────────
+
+def load_json_data_from_folder(folder_path):
+    """
+    Loads all .json files in `folder_path`, returning a combined list 
+    based on expected keys (like "personas", "riddles", etc.).
+    """
+    data_list = []
+    try:
+        json_files = glob.glob(os.path.join(folder_path, "*.json"))
+        for jf in json_files:
+            try:
+                with open(jf, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if "personas" in data:
+                        data_list.extend(data["personas"])
+                    elif "riddles" in data:
+                        data_list.extend(data["riddles"])
+                    elif "stories" in data:
+                        data_list.extend(data["stories"])
+                    elif "challenges" in data:
+                        data_list.extend(data["challenges"])
+                    else:
+                        data_list.append(data)
+            except Exception as e:
+                logger.warning(f"Error reading {jf}: {e}")
+    except Exception as e:
+        logger.error(f"Error scanning folder {folder_path}: {e}", exc_info=True)
+    return data_list
+
+PERSONAS_FOLDER = os.path.join(PROMPT_FOLDER, "personas")
+RIDDLES_FOLDER  = os.path.join(PROMPT_FOLDER, "riddles")
+STORY_FOLDER    = os.path.join(PROMPT_FOLDER, "storytelling")
+CHALL_FOLDER    = os.path.join(PROMPT_FOLDER, "challenges")
+
+PERSONAS_LIST = load_json_data_from_folder(PERSONAS_FOLDER)
+RIDDLES_LIST  = load_json_data_from_folder(RIDDLES_FOLDER)
+STORY_LIST    = load_json_data_from_folder(STORY_FOLDER)
+CHALL_LIST    = load_json_data_from_folder(CHALL_FOLDER)
+
+# ──────────────────────────────────────────────────────────────────────────
+# Authenticate Twitter Client (v2)
+# ──────────────────────────────────────────────────────────────────────────
+
+def authenticate_twitter_client():
+    try:
+        client = tweepy.Client(
+            consumer_key=API_KEY,
+            consumer_secret=API_SECRET,
+            access_token=ACCESS_TOKEN,
+            access_token_secret=ACCESS_SECRET,
+            bearer_token=BEARER_TOKEN,
+            wait_on_rate_limit=True
+        )
+        user = client.get_me()
+        if user and user.data:
+            logger.info(f"Authenticated as @{user.data.username} (User ID: {user.data.id})")
+        else:
+            logger.error("Authentication failed: Unable to fetch user data.")
+            return None
+        return client
+    except Exception as e:
+        logger.error(f"Error authenticating Twitter client: {e}", exc_info=True)
+        return None
+
+# ──────────────────────────────────────────────────────────────────────────
+# Chatty_AI: Personality Expansion
 # ──────────────────────────────────────────────────────────────────────────
 
 def load_prompts(prompt_folder=PROMPT_FOLDER):
@@ -202,63 +164,7 @@ def load_prompts(prompt_folder=PROMPT_FOLDER):
             logger.warning(f"Error loading prompt from {file}: {e}")
     return prompts
 
-# ──────────────────────────────────────────────────────────────────────────
-# 25+ Prompts for Variety
-# ──────────────────────────────────────────────────────────────────────────
-
-HARDCODED_PROMPTS = [
-    "What’s one surprising way AI is used in everyday life?",
-    "Describe how machine learning can predict weather patterns.",
-    "Name a cool AI application in the automotive industry.",
-    "What’s a fun fact about AI in video game development?",
-    "Explain how AI might improve medical diagnostics.",
-    "Share a futuristic vision for AI in smart homes.",
-    "What is quantum computing’s relationship to AI?",
-    "Talk about AI-driven creativity in music or art.",
-    "Highlight a cutting-edge breakthrough in robotics.",
-    "Why do some people fear AI, and how is it addressed?",
-    "Discuss how AI can help solve environmental challenges.",
-    "What’s an interesting fact about neural networks?",
-    "Describe how AI might transform online education.",
-    "Mention a memorable milestone in AI history.",
-    "How is AI used in agriculture to optimize crop yields?",
-    "Talk about an AI tool that boosts productivity.",
-    "What’s one important ethical concern around AI?",
-    "Discuss how AI impacts cyber-security.",
-    "Explain the concept of reinforcement learning in AI.",
-    "Share something new about GPT-style language models.",
-    "Describe an AI-driven gadget you’d love to see invented.",
-    "What is the role of big data in fueling AI progress?",
-    "Discuss a humorous AI scenario that could happen one day.",
-    "How can AI help with personalized fitness or health?",
-    "Talk about a dream future collaboration between humans and AI.",
-    "How can AI revolutionize mental health care and therapy?",
-    "Describe how AI can make public transportation systems more efficient.",
-    "What role does AI play in renewable energy optimization?",
-    "How is AI transforming the fashion industry?",
-    "What’s an example of AI improving accessibility for people with disabilities?",
-    "How might AI enhance disaster preparedness and response efforts?",
-    "What are some surprising uses of AI in sports performance and coaching?",
-    "Explain how AI can create hyper-personalized shopping experiences.",
-    "How does AI help conserve endangered species and wildlife?",
-    "What’s a fascinating way AI is being used in space exploration?",
-    "Discuss how AI could eliminate language barriers in global communication.",
-    "What role does AI play in combating misinformation online?",
-    "How can AI improve workplace safety in hazardous industries?",
-    "What’s a surprising way AI is used in the film and entertainment industry?",
-    "How does AI support personalized learning in education?",
-    "Explain how AI could enhance customer service in e-commerce.",
-    "What are some ways AI is transforming urban planning and smart cities?",
-    "How is AI helping to fight climate change?",
-    "What role does AI play in advancing autonomous delivery systems?",
-    "Describe how AI could transform the way we design and build homes.",
-    "How can AI empower small businesses to compete with larger corporations?",
-    "What’s a unique way AI is used in tracking global health trends?",
-    "How might AI redefine the way we experience art and culture?",
-    "Explain how AI can improve the safety and efficiency of supply chains.",
-    "What is the potential for AI in personalized medicine and treatments?"
-]
-
+# Combine the HARDCODED_PROMPTS with any prompts in that folder (if you like):
 ALL_PROMPTS = HARDCODED_PROMPTS + load_prompts()
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -278,7 +184,6 @@ def generate_themed_post(theme):
         "Stay under 280 characters total."
     )
 
-    # This user_prompt can be whatever guidance you’re currently providing
     user_prompt = f"""
     Theme: {theme}
 
@@ -323,12 +228,8 @@ def generate_themed_post(theme):
             frequency_penalty=0.5
         )
 
-        # 1) Get the raw text returned by GPT
         raw_text = completion.choices[0].message.content.strip()
-        
-        # 2) Strip out any leading/trailing double-quotes or single-quotes
         clean_text = raw_text.strip('"').strip("'")
-        
         return clean_text
 
     except openai.error.OpenAIError as e:
@@ -338,16 +239,13 @@ def generate_themed_post(theme):
         logger.error(f"Unexpected error generating themed post: {e}", exc_info=True)
         return f"Stay tuned for more on {theme}! #AI #Innovation #FutureTech"
 
-
 # ──────────────────────────────────────────────────────────────────────────
-# STEP 1 (REPLACEMENT): Infer Chatty's Action from the Post Text
+# Infer Action from Text
 # ──────────────────────────────────────────────────────────────────────────
 
 def auto_infer_action_from_text(post_text):
     """
-    Analyzes the post_text and returns a short phrase describing
-    an action Chatty could be doing to visually represent the theme.
-    e.g., “holding a movie camera,” “analyzing medical charts,” etc.
+    Uses GPT to infer a short imaginative action for Chatty.
     """
     try:
         system_prompt = (
@@ -359,8 +257,7 @@ def auto_infer_action_from_text(post_text):
 
         user_prompt = (
             f"Text: '{post_text}'\n"
-            "What action should Chatty be doing to show this theme visually? "
-            "Output only the action phrase, nothing else."
+            "What action should Chatty be doing? Output only the action phrase."
         )
 
         completion = openai.ChatCompletion.create(
@@ -386,13 +283,12 @@ def auto_infer_action_from_text(post_text):
         return "performing a futuristic task"  # fallback
 
 # ──────────────────────────────────────────────────────────────────────────
-# DALL·E Image Generation (Truncation & Fallback)
+# DALL·E Image Generation
 # ──────────────────────────────────────────────────────────────────────────
 
 def generate_image(prompt):
     """
     Generates an image using the DALL·E 3 model (if you have access).
-    Truncates prompt if >1000 chars, sets n=1, size=1024x1024.
     """
     try:
         if len(prompt) > 1000:
@@ -400,7 +296,7 @@ def generate_image(prompt):
             prompt = prompt[:1000]
 
         response = openai.Image.create(
-            model="dall-e-3",  # explicitly requesting DALL·E 3
+            model="dall-e-3",
             prompt=prompt,
             n=1,
             size="1024x1024"
@@ -447,7 +343,61 @@ def get_chatty_config(name):
         return ""
 
 # ──────────────────────────────────────────────────────────────────────────
-# Simplified Image Prompt Creation (Dynamic Scene)
+# RANDOM APPEARANCE HELPER (EXPANDED)
+# ──────────────────────────────────────────────────────────────────────────
+
+def randomize_chatty_appearance():
+    """
+    Return a short descriptive phrase that adds variation to Chatty's design,
+    such as a pose, facial expression, LED color, or accessory.
+    """
+    poses = [
+        "slightly leaning forward as if excited",
+        "waving with one hand raised",
+        "bouncing on its sneakers with joyful energy",
+        "doing a small dance step",
+        "looking up curiously",
+        "pointing ahead confidently",
+        "hands clasped together in delight"
+    ]
+    facial_expressions = [
+        "eyes half-shut as if blinking",
+        "big wide-eyed look of wonder",
+        "one eye winking playfully",
+        "smiling with a slight blush",
+        "happy grin showing teeth",
+        "cheeky smirk with eyebrows raised",
+        "a gentle smile with glowing cheeks"
+    ]
+    led_colors = [
+        "LEDs on arms glowing pink",
+        "LEDs on arms glowing neon blue",
+        "LEDs on arms glowing electric green",
+        "LEDs on arms glowing golden",
+        "LEDs on arms glowing rainbow",
+        "LEDs on arms pulsating teal",
+        "LEDs on arms flickering bright red"
+    ]
+    accessories = [
+        "holding a small AI robot companion",
+        "holding a paintbrush with neon paint",
+        "wearing retro headphones",
+        "with a floating mini drone beside it",
+        "holding a glowing futuristic tablet",
+        "carrying a neon toolbox",
+        "sporting a cosmic star-lamp on one hand",
+        "wearing VR goggles with a sleek futuristic design"
+    ]
+
+    chosen_pose = random.choice(poses)
+    chosen_face = random.choice(facial_expressions)
+    chosen_led = random.choice(led_colors)
+    chosen_accessory = random.choice(accessories)
+
+    return f"{chosen_pose}, {chosen_face}, {chosen_led}, {chosen_accessory}"
+
+# ──────────────────────────────────────────────────────────────────────────
+# Simplified Image Prompt Creation
 # ──────────────────────────────────────────────────────────────────────────
 
 def create_simplified_image_prompt(text_content):
@@ -460,21 +410,19 @@ def create_simplified_image_prompt(text_content):
 
         system_instruction = (
             "You are a creative AI that outputs a short, direct prompt for DALL·E describing "
-            "Chatty’s appearance AND the environment from the user content. "
-            "Under no circumstances should text, letters, signage, or written words appear in the image."
+            "Chatty’s appearance AND the environment. No text or letters anywhere."
         )
 
         user_request = (
             f"{chatty_instructions}\n\n"
-            "Key points to always include:\n"
+            "Key points:\n"
             "- Retro CRT monitor in cream/off-white\n"
             "- Bright-blue screen face with big eyes, friendly smile\n"
             "- Metallic arms + white cartoon gloves\n"
             "- Slender legs + retro sneakers\n"
-            "- Absolutely NO text, letters, or signage anywhere.\n\n"
+            "- Absolutely NO text or letters.\n\n"
             f"Scene Concept: {text_content}\n\n"
-            "Your goal: Output a short, direct DALL·E prompt describing Chatty within this environment, "
-            "without any text or letters visible. If text/letters appear, remove them."
+            "Output a short DALL·E prompt describing Chatty in this environment, without any text or letters."
         )
 
         response = openai.ChatCompletion.create(
@@ -535,67 +483,116 @@ def download_image(image_url, prompt):
         return None
 
 # ──────────────────────────────────────────────────────────────────────────
-# Themed Prompt (Optional) 
+# Example: Daily Personas
 # ──────────────────────────────────────────────────────────────────────────
 
-def get_theme_for_today():
+def post_daily_persona(client):
     """
-    50% chance: day-of-week prompt
-    50% chance: random from ALL_PROMPTS
+    Posts a short 'day in the life' snippet from a random persona in PERSONAS_LIST.
     """
-    if random.random() < 0.5:
-        day_of_week = datetime.utcnow().strftime("%A")
-        day_prompt_mapping = {
-            "Monday": "monday_ai.json",
-            "Wednesday": "wednesday_tech.json",
-            "Friday": "friday_inspiration.json"
-        }
-        if day_of_week in day_prompt_mapping:
-            try:
-                with open(os.path.join(PROMPT_FOLDER, day_prompt_mapping[day_of_week]), "r", encoding="utf-8") as f:
-                    prompt_data = json.load(f)
-                    prompt = prompt_data["prompt"]
-                    logger.info(f"Selected prompt for {day_of_week}: {prompt}")
-                    return prompt
-            except Exception as e:
-                logger.warning(f"Error loading prompt for {day_of_week}: {e}")
+    if not PERSONAS_LIST:
+        logger.warning("No personas loaded. Skipping persona post.")
+        return
 
-    if ALL_PROMPTS:
-        prompt = random.choice(ALL_PROMPTS)
-        logger.info(f"Selected random prompt: {prompt}")
-        return prompt
-    else:
-        logger.warning("No prompts available. Using default prompt.")
-        return "Share an interesting fact about AI."
+    persona = random.choice(PERSONAS_LIST)
+    user_prompt = f"You are {persona}. Write a short social media post describing a 'day in the life' and end with a fun question. Keep under 280 chars."
+    system_prompt = "You are Chatty_AI, bright and playful..."
+
+    try:
+        completion = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            max_tokens=200,
+            temperature=0.8
+        )
+        text_content = completion.choices[0].message.content.strip()
+
+        tweet_text = construct_tweet(text_content)
+        response = client.create_tweet(text=tweet_text)
+        logger.info(f"Daily Persona Tweet ID: {response.data['id']}")
+    except Exception as e:
+        logger.error(f"Error posting daily persona: {e}", exc_info=True)
 
 # ──────────────────────────────────────────────────────────────────────────
-# Tweet Construction (hashtags/emojis)
+# Example: Riddle of the Day
 # ──────────────────────────────────────────────────────────────────────────
 
-def get_contextual_emojis(content):
-    ai_emojis = {
-        "ai": "🤖",
-        "future": "🔮",
-        "innovation": "🚀",
-        "code": "💻",
-        "robot": "🤖"
-    }
-    selected = [emoji for key, emoji in ai_emojis.items() if key in content.lower()]
-    return " ".join(selected) if selected else random.choice(["🤖", "💻", "🚀", "🔮"])
+def post_riddle_of_the_day(client):
+    """
+    Posts a random puzzle/riddle from RIDDLES_LIST, inviting followers to guess.
+    Expects each .json to have a structure like {"riddles": [{"question": "...", "answer": "..."}]}.
+    """
+    if not RIDDLES_LIST:
+        logger.warning("No riddles loaded. Skipping riddle post.")
+        return
 
-def get_relevant_hashtags(content):
-    hashtag_map = {
-        "ai": "#ArtificialIntelligence",
-        "future": "#FutureTech",
-        "coding": "#100DaysOfCode",
-        "innovation": "#TechTrends"
-    }
-    tags = [ht for kw, ht in hashtag_map.items() if kw in content.lower()]
-    while len(tags) < 2:
-        tags.append(random.choice(["#AICommunity", "#Innovation", "#TechInsights"]))
-    return " ".join(random.sample(tags, len(tags)))  # shuffle or just keep as-is
+    riddle = random.choice(RIDDLES_LIST)
+    question = riddle.get("question", "What's the puzzle?")
+
+    riddle_text = f"Puzzle Time: {question}\nReply with your guess! #chatty #PuzzleTime"
+    try:
+        tweet_text = construct_tweet(riddle_text)
+        response = client.create_tweet(text=tweet_text)
+        logger.info(f"Riddle post Tweet ID: {response.data['id']}")
+    except Exception as e:
+        logger.error(f"Error posting riddle: {e}", exc_info=True)
+
+# ──────────────────────────────────────────────────────────────────────────
+# Example: Challenge of the Day
+# ──────────────────────────────────────────────────────────────────────────
+
+def post_challenge_of_the_day(client):
+    """
+    Picks a random challenge from CHALL_LIST and posts it.
+    """
+    if not CHALL_LIST:
+        logger.warning("No challenges loaded. Skipping challenge post.")
+        return
+
+    challenge = random.choice(CHALL_LIST)
+    challenge_text = f"Challenge time: {challenge}\nShare your thoughts! #chatty #Challenge"
+
+    try:
+        tweet_text = construct_tweet(challenge_text)
+        response = client.create_tweet(text=tweet_text)
+        logger.info(f"Challenge post Tweet ID: {response.data['id']}")
+    except Exception as e:
+        logger.error(f"Error posting challenge: {e}", exc_info=True)
+
+# ──────────────────────────────────────────────────────────────────────────
+# Example: Storytelling
+# ──────────────────────────────────────────────────────────────────────────
+
+def post_story_update(client):
+    """
+    Picks a random snippet from STORY_LIST and posts it.
+    """
+    if not STORY_LIST:
+        logger.warning("No stories loaded. Skipping story post.")
+        return
+
+    story_snippet = random.choice(STORY_LIST)
+    text = story_snippet.get('text', 'Once upon a time, Chatty...')
+    story_text = f"Story Time: {text}\nWhat happens next? #chatty #Story"
+
+    try:
+        tweet_text = construct_tweet(story_text)
+        response = client.create_tweet(text=tweet_text)
+        logger.info(f"Story post Tweet ID: {response.data['id']}")
+    except Exception as e:
+        logger.error(f"Error posting story update: {e}", exc_info=True)
+
+# ──────────────────────────────────────────────────────────────────────────
+# Tweet Construction (UPDATED to remove old hashtags and add 3 new tags)
+# ──────────────────────────────────────────────────────────────────────────
 
 def truncate_to_last_sentence(text, max_length=280):
+    """
+    Helper for safely truncating replies (used for mention replies).
+    """
     if len(text) <= max_length:
         return text
     truncated = text[:max_length]
@@ -606,39 +603,50 @@ def truncate_to_last_sentence(text, max_length=280):
         return truncated[:max_length-3] + "..."
 
 def construct_tweet(text_content):
-    # 1) Pick an emoji (or emojis) relevant to the content.
-    emojis = get_contextual_emojis(text_content)
-    
-    # 2) Gather relevant hashtags.
-    raw_hashtags = get_relevant_hashtags(text_content)
+    """
+    1. Strip out any existing hashtags in the text_content.
+    2. Append exactly 3 tags at the end:
+       - Always include '@chattyonsolana'
+       - Randomly choose 2 from a predefined list
+    3. Ensure tweet stays within 280 characters; if it exceeds,
+       truncate the main text (word boundary) before adding the 3 tags.
+    """
+    # 1) Remove old hashtags
+    no_hashtags = re.sub(r"#\w+", "", text_content).strip()
 
-    # 3) Make #chatty the first hashtag, then add the others.
-    #    This ensures #chatty appears at the end, but before any other hashtags.
-    hashtags = f"#chatty {raw_hashtags}"
+    # 2) Always include '@chattyonsolana' + 2 random picks
+    extra_tags_pool = [
+        "#HeyChatty", "#AIforEveryone", "#MEMECOIN", "$CHATTY",
+        "#AImeme", "#AIagent", "@OpenAI", "@ChatGPTapp"
+    ]
+    picks = random.sample(extra_tags_pool, 2)
+    tags = ["@chattyonsolana"] + picks
 
-    # 4) Build the core tweet (main text + emojis).
-    tweet_core = f"{text_content} {emojis}"
+    # 3) Build a draft tweet
+    draft_tweet = f"{no_hashtags} {' '.join(tags)}"
 
-    # 5) Check how many characters remain for hashtags (with a space in front).
-    remaining_length = 280 - len(tweet_core) - 1  # minus 1 for the space
+    # If it's too long, truncate from the main text portion
+    if len(draft_tweet) > 280:
+        reserved = len(" ".join(tags)) + 1  # space before tags
+        max_main_text_len = 280 - reserved
 
-    # 6) Truncate hashtags if needed, then combine.
-    hashtags = hashtags[:remaining_length]
-    tweet = f"{tweet_core} {hashtags}"
+        truncated = no_hashtags[:max_main_text_len]
+        last_space = truncated.rfind(" ")
+        if last_space != -1:
+            truncated = truncated[:last_space].rstrip()
 
-    # 7) Finally, if we still exceed 280, truncate the entire text to the last sentence.
-    if len(tweet) > 280:
-        tweet = truncate_to_last_sentence(tweet, max_length=280)
+        final_tweet = f"{truncated} {' '.join(tags)}"
+    else:
+        final_tweet = draft_tweet
 
-    return tweet
-
-
+    return final_tweet
 
 # ──────────────────────────────────────────────────────────────────────────
 # Image Cleanup
 # ──────────────────────────────────────────────────────────────────────────
 
 def cleanup_images(directory, max_files=100):
+    import os
     try:
         images = sorted(
             glob.glob(os.path.join(directory, "*.png")),
@@ -694,28 +702,18 @@ def is_safe_to_respond(comment):
             return False
     return True
 
-def contains_prohibited_phrases(text):
-    prohibited_phrases = ["airdrop", "giveaway", "telegram", "click", "join", "https://"]
-    lower_text = text.lower()
-    return any(phrase in lower_text for phrase in prohibited_phrases)
-
-    
 def moderate_content(text):
-    # 1) Check cache first
     if text in MODERATION_CACHE:
-        # Return True/False (cached result)
         return MODERATION_CACHE[text]
 
     try:
         resp = openai.Moderation.create(input=text)
         is_safe = not resp['results'][0]['flagged']
-        # 2) Cache the moderation result
         MODERATION_CACHE[text] = is_safe
         return is_safe
     except Exception as e:
         logger.error(f"Error with moderation API: {e}", exc_info=True)
         return False
-
 
 def deflect_unrelated_comments(comment):
     unrelated = ["account", "login", "money"]
@@ -760,86 +758,21 @@ def log_response(comment, response):
         logger.error(f"Error logging response: {e}", exc_info=True)
 
 # ──────────────────────────────────────────────────────────────────────────
-# Memory Layer with MongoDB
+# Memory and Semantic Search
 # ──────────────────────────────────────────────────────────────────────────
-
-def store_user_memory(user_id, conversation):
-    try:
-        emb = generate_embedding(conversation)
-        memory_collection.insert_one({
-            "user_id": user_id,
-            "conversation_context": conversation,
-            "embedding": emb,
-            "timestamp": datetime.utcnow()
-        })
-        logger.info(f"Stored memory for user {user_id}.")
-    except Exception as e:
-        logger.error(f"Error storing user memory for {user_id}: {e}", exc_info=True)
-
-def get_user_memory(user_id, limit=5):
-    try:
-        mems = list(memory_collection.find({"user_id": user_id}).sort("timestamp", -1).limit(limit))
-        return mems
-    except Exception as e:
-        logger.error(f"Error retrieving memory for {user_id}: {e}", exc_info=True)
-        return []
-
-# ──────────────────────────────────────────────────────────────────────────
-# Sentiment / Community
-# ──────────────────────────────────────────────────────────────────────────
-
-def fetch_community_posts(hashtag, count=50):
-    try:
-        tweets = client.search_recent_tweets(query=f"#{hashtag} -is:retweet lang:en", max_results=100)
-        return [t.text for t in tweets.data] if tweets.data else []
-    except Exception as e:
-        logger.error(f"Error fetching posts for #{hashtag}: {e}", exc_info=True)
-        return []
-
-def analyze_community_sentiment(posts):
-    try:
-        sentiments = [TextBlob(p).sentiment.polarity for p in posts]
-        avg_sent = sum(sentiments) / len(sentiments) if sentiments else 0
-        logger.info(f"Average community sentiment: {avg_sent}")
-        return avg_sent
-    except Exception as e:
-        logger.error(f"Error analyzing sentiment: {e}", exc_info=True)
-        return 0
-
-def adjust_personality_based_sentiment():
-    posts = fetch_community_posts("AICommunity", count=50)
-    avg_sent = analyze_community_sentiment(posts)
-    if avg_sent > 0.5:
-        selected_prompt = SYSTEM_PROMPTS[0]
-        logger.info("Adjusted personality: Upbeat (Chatty style 1)")
-    elif avg_sent < -0.5:
-        selected_prompt = SYSTEM_PROMPTS[1]
-        logger.info("Adjusted personality: Joyful (Chatty style 2)")
-    else:
-        selected_prompt = random.choice(SYSTEM_PROMPTS)
-        logger.info("Adjusted personality: Random from Chatty prompts")
-    return selected_prompt
-
-# ──────────────────────────────────────────────────────────────────────────
-# Embeddings + Semantic Search
-# ──────────────────────────────────────────────────────────────────────────
-
 
 def generate_embedding(text):
-    # 1) Check if we've already computed an embedding for this exact text
     if text in EMBEDDING_CACHE:
         return EMBEDDING_CACHE[text]
 
     try:
         resp = openai.Embedding.create(input=text, model="text-embedding-ada-002")
         embedding = resp['data'][0]['embedding']
-        # 2) Cache the result for this text
         EMBEDDING_CACHE[text] = embedding
         return embedding
     except Exception as e:
         logger.error(f"Error generating embedding: {e}", exc_info=True)
         return []
-
 
 def cosine_similarity(vec1, vec2):
     v1, v2 = np.array(vec1), np.array(vec2)
@@ -901,10 +834,41 @@ def is_too_similar_to_recent_tweets(new_text, similarity_threshold=0.88, lookbac
         return False
 
 # ──────────────────────────────────────────────────────────────────────────
-# Generate Response with Context
+# User Memory
 # ──────────────────────────────────────────────────────────────────────────
 
+def store_user_memory(user_id, conversation):
+    try:
+        emb = generate_embedding(conversation)
+        memory_collection.insert_one({
+            "user_id": user_id,
+            "conversation_context": conversation,
+            "embedding": emb,
+            "timestamp": datetime.utcnow()
+        })
+        logger.info(f"Stored memory for user {user_id}.")
+    except Exception as e:
+        logger.error(f"Error storing user memory for {user_id}: {e}", exc_info=True)
+
+def get_user_memory(user_id, limit=5):
+    try:
+        mems = list(memory_collection.find({"user_id": user_id}).sort("timestamp", -1).limit(limit))
+        return mems
+    except Exception as e:
+        logger.error(f"Error retrieving memory for {user_id}: {e}", exc_info=True)
+        return []
+
+# ──────────────────────────────────────────────────────────────────────────
+# Generate Contextual Response
+# ──────────────────────────────────────────────────────────────────────────
+
+def adjust_personality_based_sentiment():
+    return random.choice(SYSTEM_PROMPTS)
+
 def generate_contextual_response(user_id, comment):
+    """
+    Build a response referencing user memory and similar convos.
+    """
     try:
         mems = get_user_memory(user_id, limit=3)
         memory_context = "\n".join([m["conversation_context"] for m in mems])
@@ -942,10 +906,6 @@ def generate_contextual_response(user_id, comment):
 # ──────────────────────────────────────────────────────────────────────────
 
 def handle_comment_with_context(user_id, comment):
-    """
-    Handles user mentions by generating context-aware responses,
-    with filtering for spam or unsafe content.
-    """
     if not is_safe_to_respond(comment) or not moderate_content(comment):
         logger.info(f"Skipping unsafe or filtered comment: {comment}")
         return "I’m here to discuss AI and technology topics! 🚀✨"
@@ -997,156 +957,53 @@ def save_since_id(file_name, since_id):
         f.write(str(since_id))
 
 # ──────────────────────────────────────────────────────────────────────────
-# STEP 2: Update create_scene_content() to accept an optional "action"
+# Create Scene Content (UPDATED to combine GPT action + random appearance)
 # ──────────────────────────────────────────────────────────────────────────
 
 def create_scene_content(theme, action=None):
     """
-    Creates a short textual scene that describes Chatty (the retro CRT AI) 
-    in the context of the given theme. Also includes an optional action parameter
-    so Chatty is actually doing something in the scene.
+    Creates a short textual scene describing Chatty in the context of the given theme.
+    Combines GPT's suggested action (if valid) AND the random design from randomize_chatty_appearance().
     """
-    # Base environment for the theme
     base_scene = (
         f"Chatty, a retro CRT monitor with a bright-blue screen face, "
-        f"is in a vibrant, futuristic environment about {theme}. "
-        "No text, letters, or signage anywhere."
+        f"is in a futuristic environment about {theme}. "
+        "No text or letters anywhere."
     )
 
-    # If an action is provided, incorporate it
-    if action:
-        base_scene += f" Chatty is {action}."
+    # Always get our random design variation
+    random_appearance = randomize_chatty_appearance()
+
+    # If GPT's action is a fallback or empty, we skip it; otherwise we combine.
+    if action and "futuristic task" not in action.lower():
+        base_scene += f" Chatty is {action}. Additionally, Chatty is {random_appearance}."
+    else:
+        base_scene += f" Chatty is {random_appearance}."
 
     return base_scene
 
 # ──────────────────────────────────────────────────────────────────────────
-# STEP 3: post_to_twitter() - Now uses auto_infer_action_from_text()
+# Posting to Twitter
 # ──────────────────────────────────────────────────────────────────────────
 
 def post_to_twitter(client, post_count, force_image=False):
     """
-    Posts a tweet where:
-      - The TEXT is based on the 'themed' style from generate_themed_post(theme).
-      - The ACTION is inferred from that text, so Chatty performs a relevant task.
-      - The IMAGE is generated with that theme + action.
+    Posts a tweet. Every 3rd post includes an image (or override with force_image=True).
     """
-    themes_list = [
-        "AI in Earth Observation Satellites",
-        "AI into Housing Solutions",
-        "AI in Medicine",
-        "AI in Education",
-        "AI for Mental Health",
-        "AI in Transportation",
-        "AI in Agriculture",
-        "AI in Sports Performance",
-        "AI for Disaster Prevention",
-        "AI in Fashion",
-        "AI in Energy Optimization",
-        "AI in Robotics",
-        "AI in Finance",
-        "AI for Urban Development",
-        "AI for Cybersecurity",
-        "AI in Space Exploration",
-        "AI for Climate Change",
-        "AI for Smart Homes",
-        "AI for Accessibility",
-        "AI for Art and Creativity",
-        "AI for Language Translation",
-        "AI for Environmental Conservation",
-        "AI in Entertainment",
-        "AI in Retail",
-        "AI for Personal Assistants",
-        "AI for Food and Beverage",
-        "AI in Manufacturing",
-        "AI for Wildlife Protection",
-        "AI in Genomics",
-        "AI for Drone Swarm Coordination",
-        "AI in Film Post-Production",
-        "AI for Hospitality Services",
-        "AI in Emotional Recognition",
-        "AI for Music Composition",
-        "AI in Sustainable Fisheries",
-        "AI for Public Health Monitoring",
-        "AI in Home Security Systems",
-        "AI for Personalized Nutrition",
-        "AI in Voice Recognition",
-        "AI in Telehealth",
-        "AI for Music Recommendation",
-        "AI in Virtual Reality",
-        "AI for Agricultural Robotics",
-        "AI for Traffic Management",
-        "AI in Insurance",
-        "AI for Fraud Detection",
-        "AI in Real Estate Valuation",
-        "AI for Genetic Research",
-        "AI in 3D Printing",
-        "AI for E-Learning Platforms",
-        "AI in Drone Delivery Services",
-        "AI for Marine Conservation",
-        "AI in Aviation",
-        "AI for Voice Cloning",
-        "AI in Food Delivery Optimization",
-        "AI for Earthquake Prediction",
-        "AI in Online Dating",
-        "AI for Remote Workforce Management",
-        "AI in Astronomy",
-        "AI for Search and Rescue",
-        "AI in Automotive Safety",
-        "AI for Social Good Campaigns",
-        "AI in Cultural Preservation",
-        "AI for Political Polling",
-        "AI in Talent Recruiting",
-        "AI for Water Resource Management",
-        "AI in Crowd Control",
-        "AI for Psychotherapy Chatbots",
-        "AI in Hardware Optimization",
-        "AI for Autonomous Underwater Vehicles",
-        "AI in Battery Technology",
-        "AI for Emotional Support Bots",
-        "AI in Weather Forecasting",
-        "AI for Brain-Computer Interfaces",
-        "AI in Pharmaceuticals",
-        "AI for Restaurant Menu Insights",
-        "AI in Nonprofit Fundraising",
-        "AI for Workforce Reskilling",
-        "AI in eSports Analytics",
-        "AI for Journalism Assistance",
-        "AI in Supply Chain Resilience",
-        "AI for Consumer Behavior Analysis",
-        "AI in Ethical Decision-Making",
-        "AI for Demographic Predictions",
-        "AI in Customer Service Chatbots",
-        "AI for Digital Marketing Automation",
-        "AI in HR Analytics",
-        "AI for Personalized Fitness",
-        "AI in Brain Research",
-        "AI for Cultural Heritage Restoration",
-        "AI in Prosthetics Design",
-        "AI for Firefighting Drones",
-        "AI in Children's Education",
-        "AI for Marine Robotics",
-        "AI in Hospital Administration",
-        "AI for Elderly Care",
-        "AI in Literary Analysis",
-        "AI for Rare Disease Diagnosis",
-        "AI in Carbon Capture",
-        "AI for Personalized Travel Recommendations"
-    ]
-
     try:
-        # 1) Pick a random theme each time
+        # 1) Pick a random theme from the newly loaded JSON-based themes_list
         theme = random.choice(themes_list)
         logger.info(f"Randomly chosen theme: {theme}")
 
-        # 2) Generate a short, upbeat post for this theme
+        # 2) Generate short post for this theme
         text_content = generate_themed_post(theme)
 
-        # 3) Avoid duplicates if it's too similar to recent tweets
+        # 3) Avoid duplicates if too similar
         if is_too_similar_to_recent_tweets(text_content, similarity_threshold=0.95, lookback=10):
             logger.warning("Themed post is too similar to a recent tweet. Using fallback instead.")
             text_content = "Exciting times in AI! Stay tuned, #AICommunity 🤖🚀"
 
-        # 4) Construct the final tweet (shortening if needed)
+        # 4) Construct final tweet
         tweet_text = construct_tweet(text_content)
 
         # 5) Decide whether to attach an image
@@ -1155,24 +1012,20 @@ def post_to_twitter(client, post_count, force_image=False):
 
         if include_image:
             logger.info("Including image in this post.")
-
-            # (A) Infer the best action from the post text
+            # GPT-based action
             inferred_action = auto_infer_action_from_text(text_content)
-
-            # (B) Create a scene referencing the theme + that action
+            # Combine GPT's action + random appearance
             scene_content = create_scene_content(theme, action=inferred_action)
-
-            # (C) Convert scene to a DALL·E prompt
+            # Build DALL·E prompt
             img_prompt = create_simplified_image_prompt(scene_content)
-
-            # (D) Generate the DALL·E image
+            # Generate + download
             img_url = generate_image(img_prompt)
             if img_url:
                 image_path = download_image(img_url, img_prompt)
             else:
                 logger.warning("Failed to generate image. Skipping image for this post.")
 
-        # 6) Post to Twitter (with or without image)
+        # 6) Post to Twitter
         if image_path:
             try:
                 auth = tweepy.OAuth1UserHandler(
@@ -1303,84 +1156,44 @@ def respond_to_mentions(client, since_id):
 # Scheduling
 # ──────────────────────────────────────────────────────────────────────────
 
-def schedule_posting(client):
-    hours = random.choice([3, 4])
-    schedule.every(hours).hours.do(posting_task, client=client)
-    logger.info(f"Scheduled posting to run every {hours} hours.")
-
-def posting_task(client):
-    global post_count
+def posting_task(client, post_count):
     logger.info("Starting scheduled posting task.")
     post_count = post_to_twitter(client, post_count)
     save_post_count("post_count.txt", post_count)
+    return post_count
 
-def schedule_mention_checking():
-    schedule.every(1).hours.do(mention_checking_task)
-    logger.info("Scheduled mention checking every 1 hour.")
-
-def mention_checking_task():
-    global since_id
+def mention_checking_task(client, since_id):
     logger.info("Starting mention checking task.")
     new_id = respond_to_mentions(client, since_id)
     if new_id != since_id:
         save_since_id("since_id.txt", new_id)
-        since_id = new_id
+        return new_id
+    return since_id
 
-def initialize_scheduling(client):
-    schedule_posting(client)
-    schedule_mention_checking()
+def schedule_posting(client, post_count):
+    """
+    Schedule the posting task to run every N hours.
+    """
+    hours = random.choice([3, 4])
+    schedule.every(hours).hours.do(posting_task, client=client, post_count=post_count)
+    logger.info(f"Scheduled posting to run every {hours} hours.")
 
-# ──────────────────────────────────────────────────────────────────────────
-# Main Execution Flow
-# ──────────────────────────────────────────────────────────────────────────
+def schedule_mention_checking(client, since_id):
+    schedule.every(1).hours.do(mention_checking_task, client=client, since_id=since_id)
+    logger.info("Scheduled mention checking every 1 hour.")
 
-post_count = 0
-since_id = None
-client = None
+def schedule_daily_persona(client):
+    """Example: post a persona each day at 10:00 AM."""
+    schedule.every().day.at("10:00").do(post_daily_persona, client=client)
 
-if __name__ == "__main__":
-    client = authenticate_twitter_client()
-    logger.info("AI bot is running...")
+def schedule_riddle_of_the_day(client):
+    """Example: post a riddle each day at 16:00 (4 PM)."""
+    schedule.every().day.at("16:00").do(post_riddle_of_the_day, client=client)
 
-    post_count = load_post_count("post_count.txt")
-    since_id = load_since_id("since_id.txt")
+def schedule_daily_challenge(client):
+    """Example: post a challenge each day at 12:00 (12 PM)."""
+    schedule.every().day.at("12:00").do(post_challenge_of_the_day, client=client)
 
-    # Store a bullet-point Chatty persona in "BaseChatty", used for images
-    chatty_persona_text = """
-Chatty is a delightful, retro-styled character blending classic computers with modern AI features:
-
-1) SCREEN FACE:
-   - Vibrant bright blue screen with large, friendly eyes.
-   - Subtle shine or reflections for a lifelike effect.
-   - Cheerful, dynamic smile; slight blush or highlights on cheeks.
-
-2) CRT MONITOR BODY:
-   - Retro CRT monitor casing (cream/off-white/beige) with ventilation grilles, buttons, power light.
-   - Soft shadows and reflections for a 3D, photorealistic look.
-
-3) ARMS & HANDS:
-   - Flexible, polished metallic arms, cartoon-style white gloves.
-
-4) LEGS & SNEAKERS:
-   - Rounded, slender legs with colorful, retro-inspired sneakers (detailed shoelaces, reflections).
-
-5) OVERALL STYLE:
-   - Clean, polished cartoon vibe in photorealistic settings, with consistent lighting and shadows.
-"""
-    store_chatty_config("BaseChatty", chatty_persona_text)
-
-    logger.info("Posting an immediate tweet WITH an image.")
-    post_count = post_to_twitter(client, post_count, force_image=True)
-    save_post_count("post_count.txt", post_count)
-
-    initialize_scheduling(client)
-
-    while True:
-        try:
-            schedule.run_pending()
-            time.sleep(1)
-        except Exception as e:
-            logger.error(f"Main loop error: {e}", exc_info=True)
-            traceback.print_exc()
-            time.sleep(60)
-
+def schedule_storytime(client):
+    """Example: post a story snippet each day at 18:00 (6 PM)."""
+    schedule.every().day.at("18:00").do(post_story_update, client=client)
