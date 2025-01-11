@@ -10,6 +10,8 @@ import openai
 import tweepy
 import nltk
 import re
+import time
+from collections import deque
 from textblob import TextBlob
 from datetime import datetime
 
@@ -23,9 +25,34 @@ from config_and_setup import (
     IMAGE_DIR, PROMPT_FOLDER
 )
 
-# Global in-memory caches
+# ──────────────────────────────────────────────────────────────────────────
+# Global in-memory caches & Rate-Limit tracking
+# ──────────────────────────────────────────────────────────────────────────
+
 EMBEDDING_CACHE = {}   # key: text, value: embedding list
 MODERATION_CACHE = {}  # key: text, value: Boolean (True => safe, False => flagged)
+
+# Simple in-memory rate-limit: user_id -> deque of request timestamps
+USER_RATE_LIMITS = {}
+
+def check_rate_limit(user_id, max_requests=5, window_sec=60):
+    """
+    Allows up to `max_requests` requests within the last `window_sec` seconds.
+    Returns False if user is over the limit; True otherwise.
+    """
+    now = datetime.utcnow()
+    if user_id not in USER_RATE_LIMITS:
+        USER_RATE_LIMITS[user_id] = deque()
+
+    # Remove old entries
+    while USER_RATE_LIMITS[user_id] and (now - USER_RATE_LIMITS[user_id][0]).total_seconds() > window_sec:
+        USER_RATE_LIMITS[user_id].popleft()
+
+    if len(USER_RATE_LIMITS[user_id]) >= max_requests:
+        return False
+
+    USER_RATE_LIMITS[user_id].append(now)
+    return True
 
 # Ensure 'punkt' is downloaded for TextBlob
 try:
@@ -52,8 +79,8 @@ THEMES_FILE = os.path.join(DATA_DIR, "themes.json")
 PROMPTS_FILE = os.path.join(DATA_DIR, "hardcoded_prompts.json")
 
 # Load them in place of large Python lists
-themes_list = load_list_from_json(THEMES_FILE)         # replaces old themes_list
-HARDCODED_PROMPTS = load_list_from_json(PROMPTS_FILE)  # replaces old HARDCODED_PROMPTS
+themes_list = load_list_from_json(THEMES_FILE)
+HARDCODED_PROMPTS = load_list_from_json(PROMPTS_FILE)
 
 # ──────────────────────────────────────────────────────────────────────────
 # SYSTEM_PROMPTS, other existing code, etc.
@@ -82,7 +109,7 @@ def select_system_prompt():
     return random.choice(SYSTEM_PROMPTS)
 
 # ──────────────────────────────────────────────────────────────────────────
-# Load Persona / Riddle / Story / Challenge data from subfolders
+# Load Persona / Riddle / Story / Challenge data
 # ──────────────────────────────────────────────────────────────────────────
 
 def load_json_data_from_folder(folder_path):
@@ -164,18 +191,87 @@ def load_prompts(prompt_folder=PROMPT_FOLDER):
             logger.warning(f"Error loading prompt from {file}: {e}")
     return prompts
 
-# Combine the HARDCODED_PROMPTS with any prompts in that folder (if you like):
+# Combine the HARDCODED_PROMPTS with any prompts in that folder
 ALL_PROMPTS = HARDCODED_PROMPTS + load_prompts()
 
 # ──────────────────────────────────────────────────────────────────────────
-# OpenAI Content Generation (using GPT‑4)
+# GPT (with optional robust retry)
+# ──────────────────────────────────────────────────────────────────────────
+
+def robust_chat_completion(messages, model="gpt-4", max_retries=2, **kwargs):
+    """
+    Wrap openai.ChatCompletion.create in a retry loop to handle transient errors.
+    `messages` should be a list of {"role": "...", "content": "..."}
+    """
+    for attempt in range(max_retries):
+        try:
+            start_time = time.time()
+            resp = openai.ChatCompletion.create(
+                model=model,
+                messages=messages,
+                **kwargs
+            )
+            end_time = time.time()
+            logger.info(f"GPT call took {end_time - start_time:.2f} seconds on attempt {attempt+1}.")
+            return resp
+        except openai.error.OpenAIError as e:
+            logger.error(f"OpenAIError on attempt {attempt+1}: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(2)
+            else:
+                logger.error("Max GPT retries reached.")
+                return None
+        except Exception as e:
+            logger.error(f"General error in GPT call: {e}", exc_info=True)
+            return None
+
+# ──────────────────────────────────────────────────────────────────────────
+# Summaries for Long Threads (Example)
+# ──────────────────────────────────────────────────────────────────────────
+
+def summarize_text(text):
+    """
+    Summarizes a long text into a short paragraph.
+    If text < 500 chars, just return it.
+    Otherwise, use GPT to condense.
+    """
+    if not text:
+        return ""
+    if len(text) <= 500:
+        return text
+
+    summary_prompt = [
+        {"role": "system", "content": "You are a helpful assistant who summarizes text."},
+        {"role": "user", "content": f"Please summarize the following conversation in 3 concise sentences:\n{text}"}
+    ]
+    resp = robust_chat_completion(summary_prompt, model="gpt-3.5-turbo", max_tokens=100)
+    if resp:
+        return resp["choices"][0]["message"]["content"].strip()
+    else:
+        return text[:500] + "..."
+
+def build_conversation_path(tweet_id):
+    """
+    Reconstruct the linear path from the earliest ancestor to this tweet.
+    This uses parent_id references in posted_tweets_collection.
+    """
+    path_texts = []
+    current_id = tweet_id
+    while current_id:
+        doc = posted_tweets_collection.find_one({"tweet_id": current_id})
+        if not doc:
+            break
+        path_texts.insert(0, doc["text"])  # prepend older first
+        current_id = doc.get("parent_id")
+    return "\n".join(path_texts)
+
+# ──────────────────────────────────────────────────────────────────────────
+# OpenAI Content Generation (using GPT‑4) - Themed Post
 # ──────────────────────────────────────────────────────────────────────────
 
 def generate_themed_post(theme):
     """
-    Generates a short, optimistic, and engaging social media post
-    about the given theme, featuring emojis, hashtags,
-    and a call-to-action question.
+    Generates a short, optimistic, and engaging social media post.
     """
     system_prompt = (
         "You are a social media copywriter who creates short, vivid, and enthusiastic posts. "
@@ -184,60 +280,21 @@ def generate_themed_post(theme):
         "Stay under 280 characters total."
     )
 
-    user_prompt = f"""
-    Theme: {theme}
+    user_prompt = (
+        f"Theme: {theme}\n\n"
+        "Please create a short futuristic post. End with a question. Under 280 chars."
+    )
 
-    Examples of desired style:
-
-    1) "Imagine a home that knows you better than you know yourself! 🏠✨ 
-       AI-powered smart homes are here, optimizing energy use, enhancing security, 
-       and making life simpler. 🌟🤖 Who’s ready to live in the future? 🙌💡 
-       #SmartHomes #AIInnovation #FutureOfLiving #TechForGood"
-
-    2) "AI is breaking barriers in housing! 🏘💻 
-       From designing affordable homes to optimizing construction costs, 
-       AI is making housing accessible for all. 🌍💕 Let’s build a future 
-       where everyone has a roof over their head. Who’s with me? 🙏✨ 
-       #AffordableHousing #AIForGood #SustainableLiving #TechRevolution"
-
-    3) "City living, reimagined! 🌆🤖 AI is transforming urban planning, 
-       creating smarter, greener, and more efficient cities. From traffic 
-       management to energy grids, the future is here. 🚀🌱 
-       What’s your dream city? Let’s build it together! 💬💎 
-       #UrbanPlanning #AICommunity #FutureCities #SmartLiving"
-
-    4) "AI is revolutionizing diagnostics! 🏥✨ 
-       With machine learning, diseases are detected faster and more accurately than ever before. 
-       🩺🤖 Early detection saves lives—let’s embrace this medical marvel! 💕💡 
-       Who’s excited about the future of healthcare? 🙌🌟 
-       #AIinMedicine #FutureOfHealthcare #TechForGood #HealthTech"
-
-    Based on these examples, please create a similar style post for the theme above.
-    """
-
-    try:
-        completion = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            max_tokens=220,
-            temperature=0.8,
-            presence_penalty=1.0,
-            frequency_penalty=0.5
-        )
-
-        raw_text = completion.choices[0].message.content.strip()
-        clean_text = raw_text.strip('"').strip("'")
-        return clean_text
-
-    except openai.error.OpenAIError as e:
-        logger.error(f"OpenAI Error generating themed post: {e}", exc_info=True)
-        return f"Exciting news on {theme}! 🌟🚀 Let's harness AI for a brighter future. #AI #TechForGood"
-    except Exception as e:
-        logger.error(f"Unexpected error generating themed post: {e}", exc_info=True)
-        return f"Stay tuned for more on {theme}! #AI #Innovation #FutureTech"
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt}
+    ]
+    resp = robust_chat_completion(messages, max_tokens=220, temperature=0.8, presence_penalty=1.0, frequency_penalty=0.5)
+    if resp:
+        raw_text = resp.choices[0].message.content.strip()
+        return raw_text.strip('"').strip("'")
+    else:
+        return f"Exciting news on {theme}! #AI #TechForGood"
 
 # ──────────────────────────────────────────────────────────────────────────
 # Infer Action from Text
@@ -247,40 +304,29 @@ def auto_infer_action_from_text(post_text):
     """
     Uses GPT to infer a short imaginative action for Chatty.
     """
-    try:
-        system_prompt = (
-            "You are a creative AI. Given a short text about an AI-related topic, "
-            "suggest exactly ONE short, imaginative action that a retro CRT character (Chatty) "
-            "would perform to visually represent that topic. "
-            "Keep it brief, and avoid brand names or any text in the environment."
-        )
+    system_prompt = (
+        "You are a creative AI. Given a short text about an AI-related topic, "
+        "suggest exactly ONE short, imaginative action that a retro CRT character (Chatty) "
+        "would perform to visually represent that topic. "
+        "Keep it brief, and avoid brand names or any text in the environment."
+    )
 
-        user_prompt = (
-            f"Text: '{post_text}'\n"
-            "What action should Chatty be doing? Output only the action phrase."
-        )
+    user_prompt = (
+        f"Text: '{post_text}'\n"
+        "What action should Chatty be doing? Output only the action phrase."
+    )
 
-        completion = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            max_tokens=40,
-            temperature=0.9,
-            presence_penalty=1.0,
-            frequency_penalty=0.5
-        )
-        action_text = completion.choices[0].message.content.strip()
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt}
+    ]
+    resp = robust_chat_completion(messages, max_tokens=40, temperature=0.9, presence_penalty=1.0, frequency_penalty=0.5)
+    if resp:
+        action_text = resp.choices[0].message.content.strip()
         logger.info(f"Inferred Action: {action_text}")
         return action_text
-
-    except openai.error.OpenAIError as e:
-        logger.error(f"OpenAI Error inferring action: {e}", exc_info=True)
-        return "performing a futuristic task"  # fallback
-    except Exception as e:
-        logger.error(f"Unexpected error in auto_infer_action_from_text: {e}", exc_info=True)
-        return "performing a futuristic task"  # fallback
+    else:
+        return "performing a futuristic task"
 
 # ──────────────────────────────────────────────────────────────────────────
 # DALL·E Image Generation
@@ -343,7 +389,7 @@ def get_chatty_config(name):
         return ""
 
 # ──────────────────────────────────────────────────────────────────────────
-# RANDOM APPEARANCE HELPER (EXPANDED)
+# RANDOM APPEARANCE HELPER
 # ──────────────────────────────────────────────────────────────────────────
 
 def randomize_chatty_appearance():
@@ -425,37 +471,28 @@ def create_simplified_image_prompt(text_content):
             "Output a short DALL·E prompt describing Chatty in this environment, without any text or letters."
         )
 
-        response = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": system_instruction},
-                {"role": "user", "content": user_request}
-            ],
-            max_tokens=120,
-            temperature=0.9,
-            presence_penalty=0.7,
-            frequency_penalty=0.5
-        )
-
-        prompt_result = response.choices[0].message.content.strip()
-
-        if len(prompt_result) > 1000:
-            logger.warning(f"Truncating prompt from {len(prompt_result)} to 1000 chars.")
-            prompt_result = prompt_result[:1000]
-
-        logger.info(f"Simplified Chatty Prompt Created: {prompt_result}")
-        return prompt_result
+        messages = [
+            {"role": "system", "content": system_instruction},
+            {"role": "user", "content": user_request}
+        ]
+        response = robust_chat_completion(messages, model="gpt-4", max_tokens=120, temperature=0.9,
+                                          presence_penalty=0.7, frequency_penalty=0.5)
+        if response:
+            prompt_result = response.choices[0].message.content.strip()
+            if len(prompt_result) > 1000:
+                logger.warning(f"Truncating prompt from {len(prompt_result)} to 1000 chars.")
+                prompt_result = prompt_result[:1000]
+            logger.info(f"Simplified Chatty Prompt Created: {prompt_result}")
+            return prompt_result
+        else:
+            return "Depict Chatty (retro CRT) with no text or letters in the environment."
 
     except openai.error.OpenAIError as e:
         logger.error(f"OpenAI Error creating simplified image prompt: {e}", exc_info=True)
-        return (
-            "Depict Chatty (retro CRT) with no text or letters in the environment."
-        )
+        return "Depict Chatty (retro CRT) with no text or letters in the environment."
     except Exception as e:
         logger.error(f"Unexpected error creating simplified image prompt: {e}", exc_info=True)
-        return (
-            f"Depict Chatty (retro CRT) in this setting, with no text or letters: {text_content}"
-        )
+        return f"Depict Chatty (retro CRT) in this setting, with no text or letters: {text_content}"
 
 # ──────────────────────────────────────────────────────────────────────────
 # Image Download
@@ -498,17 +535,16 @@ def post_daily_persona(client):
     user_prompt = f"You are {persona}. Write a short social media post describing a 'day in the life' and end with a fun question. Keep under 280 chars."
     system_prompt = "You are Chatty_AI, bright and playful..."
 
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt}
+    ]
     try:
-        completion = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            max_tokens=200,
-            temperature=0.8
-        )
-        text_content = completion.choices[0].message.content.strip()
+        completion = robust_chat_completion(messages, model="gpt-4", max_tokens=200, temperature=0.8)
+        if completion:
+            text_content = completion.choices[0].message.content.strip()
+        else:
+            text_content = "I'm living a bright day as a persona—what's your next move? #chatty"
 
         tweet_text = construct_tweet(text_content)
         response = client.create_tweet(text=tweet_text)
@@ -586,59 +622,100 @@ def post_story_update(client):
         logger.error(f"Error posting story update: {e}", exc_info=True)
 
 # ──────────────────────────────────────────────────────────────────────────
-# Tweet Construction (UPDATED to remove old hashtags and add 3 new tags)
+# Tweet Construction
 # ──────────────────────────────────────────────────────────────────────────
 
-def truncate_to_last_sentence(text, max_length=280):
+
+def truncate_tweet(text, max_length=280):
     """
-    Helper for safely truncating replies (used for mention replies).
+    1) If `text` <= max_length, return as-is.
+    2) Otherwise, slice to max_length.
+    3) Look in the final ~30 chars for punctuation or space to break on.
+    4) If all else fails, add '...' at the end.
+    5) Finally, remove any incomplete hashtag leftover at the end.
     """
     if len(text) <= max_length:
         return text
+
     truncated = text[:max_length]
-    last_punc = max(truncated.rfind(c) for c in ".!?")
-    if last_punc != -1:
-        return truncated[:last_punc+1]
+    safe_zone_len = 30
+    if len(truncated) < safe_zone_len:
+        safe_zone_len = len(truncated)
+    safe_zone = truncated[-safe_zone_len:]
+
+    # Look for . ! ?
+    punctuation_index = -1
+    for punc in ('.','?','!'):
+        idx = safe_zone.rfind(punc)
+        if idx > punctuation_index:
+            punctuation_index = idx
+
+    if punctuation_index != -1:
+        global_punc_index = len(truncated) - safe_zone_len + punctuation_index
+        truncated = truncated[:global_punc_index + 1].rstrip()
     else:
-        return truncated[:max_length-3] + "..."
+        # No punctuation, try last space
+        space_index = safe_zone.rfind(' ')
+        if space_index != -1:
+            global_space = len(truncated) - safe_zone_len + space_index
+            truncated = truncated[:global_space].rstrip() + "..."
+        else:
+            # Fallback
+            truncated = truncated.rsplit(' ', 1)[0].rstrip() + "..."
+
+    # Step 5: remove partial hashtag if it got chopped (e.g. "#…")
+    truncated = remove_partial_hashtag(truncated)
+    return truncated
+
+def remove_partial_hashtag(text):
+    """
+    If the tweet ends with something like '#…' or a partial hashtag,
+    remove that last word entirely.
+    """
+    words = text.rstrip().split()
+    if not words:
+        return text
+
+    last_word = words[-1]
+    # If last_word starts with '#' and is very short or contains '...'
+    # => consider it a partial hashtag, remove it.
+    if last_word.startswith('#') and (len(last_word) < 3 or '...' in last_word):
+        words.pop()
+        return ' '.join(words)
+    return text
 
 def construct_tweet(text_content):
     """
-    1. Strip out any existing hashtags in the text_content.
-    2. Append exactly 2 tags at the end:
-       - Always include '@chattyonsolana'
-       - Randomly choose 1 from a predefined list
-    3. Ensure tweet stays within 280 characters; if it exceeds,
-       truncate the main text (word boundary) before adding the 2 tags.
+    1) Strip quotes & whitespace from GPT output.
+    2) Remove existing hashtags in text_content.
+    3) Append '@chattyonsolana' + a random second tag.
+    4) If over 280, try removing the second tag. 
+       If STILL over 280, do a final cut with '...'.
     """
-    # 1) Remove old hashtags
+
+    text_content = text_content.strip().strip('"').strip("'")
     no_hashtags = re.sub(r"#\w+", "", text_content).strip()
 
-    # 2) Always include '@chattyonsolana' + 1 random pick
     extra_tags_pool = [
         "#HeyChatty", "#AIforEveryone", "#MEMECOIN", "$CHATTY",
-        "#AImeme", "#AIagent", "@OpenAI", "@ChatGPTapp"
+        "#AImeme", "#AIagent"
     ]
     pick = random.choice(extra_tags_pool)
     tags = ["@chattyonsolana", pick]
 
-    # 3) Build a draft tweet
     draft_tweet = f"{no_hashtags} {' '.join(tags)}"
 
-    # If it's too long, truncate from the main text portion
-    if len(draft_tweet) > 280:
-        reserved = len(" ".join(tags)) + 1  # space before tags
-        max_main_text_len = 280 - reserved
+    if len(draft_tweet) <= 280:
+        return draft_tweet
 
-        truncated = no_hashtags[:max_main_text_len]
-        last_space = truncated.rfind(" ")
-        if last_space != -1:
-            truncated = truncated[:last_space].rstrip()
+    # Fallback 1: Remove the second tag
+    fallback_one = f"{no_hashtags} {tags[0]}"
+    if len(fallback_one) <= 280:
+        return fallback_one
 
-        final_tweet = f"{truncated} {' '.join(tags)}"
-    else:
-        final_tweet = draft_tweet
-
+    # Fallback 2: final trim with '...'
+    # e.g. cut near 277 and add "..."
+    final_tweet = fallback_one[:277].rstrip() + "..."
     return final_tweet
 
 
@@ -647,7 +724,6 @@ def construct_tweet(text_content):
 # ──────────────────────────────────────────────────────────────────────────
 
 def cleanup_images(directory, max_files=100):
-    import os
     try:
         images = sorted(
             glob.glob(os.path.join(directory, "*.png")),
@@ -660,10 +736,8 @@ def cleanup_images(directory, max_files=100):
                 logger.info(f"Deleted old image: {images[-1]}")
                 images.pop(-1)
             except Exception as remove_error:
-                logger.error(
-                    f"Error removing file {images[-1]}: {remove_error}",
-                    exc_info=True
-                )
+                logger.error(f"Error removing file {images[-1]}: {remove_error}",
+                             exc_info=True)
                 break
         logger.info("Image cleanup completed.")
     except Exception as e:
@@ -735,19 +809,16 @@ def generate_safe_response(comment):
         "You are a helpful AI. You only discuss AI-related topics. "
         "If the question is about personal info or finances, politely decline."
     )
-    prompt = f"You are asked: '{comment}'. Respond appropriately."
-    try:
-        resp = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=100
-        )
+    user_prompt = f"You are asked: '{comment}'. Respond appropriately."
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt}
+    ]
+    resp = robust_chat_completion(messages, model="gpt-4", max_tokens=100)
+    if resp:
         return resp['choices'][0]['message']['content'].strip()
-    except Exception as e:
-        logger.error(f"Error generating safe response: {e}", exc_info=True)
+    else:
         return "I’m sorry, I can’t help with that. 🤖"
 
 def log_response(comment, response):
@@ -765,7 +836,6 @@ def log_response(comment, response):
 def generate_embedding(text):
     if text in EMBEDDING_CACHE:
         return EMBEDDING_CACHE[text]
-
     try:
         resp = openai.Embedding.create(input=text, model="text-embedding-ada-002")
         embedding = resp['data'][0]['embedding']
@@ -860,169 +930,86 @@ def get_user_memory(user_id, limit=5):
         return []
 
 # ──────────────────────────────────────────────────────────────────────────
-# Generate Contextual Response
+# Post-generation Moderation
 # ──────────────────────────────────────────────────────────────────────────
 
-def adjust_personality_based_sentiment():
-    return random.choice(SYSTEM_PROMPTS)
-
-def generate_contextual_response(user_id, comment):
+def moderate_bot_output(bot_text):
     """
-    Build a response referencing user memory and similar convos.
+    Re-run the moderation on the final GPT output.
+    If flagged, return a polite fallback.
     """
-    try:
-        mems = get_user_memory(user_id, limit=3)
-        memory_context = "\n".join([m["conversation_context"] for m in mems])
-
-        similar = search_similar_conversations(comment, top_k=3)
-        similar_context = "\n".join(similar)
-
-        system_prompt = adjust_personality_based_sentiment()
-        full_prompt = (
-            f"{system_prompt}\n\n"
-            f"Past interactions:\n{memory_context}\n\n"
-            f"Similar convos:\n{similar_context}\n\n"
-            f"User asked: '{comment}'"
-        )
-        resp = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": full_prompt},
-                {"role": "user", "content": comment}
-            ],
-            max_tokens=150,
-            temperature=0.9,
-            presence_penalty=0.7,
-            frequency_penalty=0.5
-        )
-        gen = resp['choices'][0]['message']['content'].strip()
-        logger.info(f"Generated Contextual Response: {gen}")
-        return gen
-    except Exception as e:
-        logger.error(f"Error generating contextual response: {e}", exc_info=True)
-        return "I'm here to talk about AI! 🤖"
+    if not moderate_content(bot_text):
+        logger.warning("Bot output was flagged; returning fallback.")
+        return "I’m sorry, let me rephrase that to keep things friendly. 🤖"
+    return bot_text
 
 # ──────────────────────────────────────────────────────────────────────────
-# Handling Comments with Memory + Context
-# ──────────────────────────────────────────────────────────────────────────
-
-def handle_comment_with_context(user_id, comment):
-    if not is_safe_to_respond(comment) or not moderate_content(comment):
-        logger.info(f"Skipping unsafe or filtered comment: {comment}")
-        return "I’m here to discuss AI and technology topics! 🚀✨"
-
-    deflection = deflect_unrelated_comments(comment)
-    if deflection:
-        return deflection
-
-    faq = static_response(comment)
-    if faq:
-        return faq
-
-    contextual_response = generate_contextual_response(user_id, comment)
-    if contextual_response:
-        log_response(comment, contextual_response)
-        store_user_memory(user_id, contextual_response)
-        try:
-            emb = generate_embedding(contextual_response)
-            if emb:
-                embeddings_collection.insert_one({
-                    "conversation_context": contextual_response,
-                    "embedding": emb,
-                    "timestamp": datetime.utcnow()
-                })
-                logger.info("Stored embedding for semantic search.")
-        except Exception as e:
-            logger.error(f"Error storing embedding: {e}", exc_info=True)
-        return contextual_response
-    else:
-        return "I’m always here to chat about AI! 🤖✨"
-
-# ──────────────────────────────────────────────────────────────────────────
-# since_id Persistence
-# ──────────────────────────────────────────────────────────────────────────
-
-def load_since_id(file_name):
-    if os.path.exists(file_name):
-        with open(file_name, 'r') as f:
-            try:
-                return int(f.read().strip())
-            except ValueError:
-                logger.warning(f"Invalid since_id in {file_name}. Resetting to None.")
-                return None
-    else:
-        return None
-
-def save_since_id(file_name, since_id):
-    with open(file_name, 'w') as f:
-        f.write(str(since_id))
-
-# ──────────────────────────────────────────────────────────────────────────
-# Create Scene Content (UPDATED to combine GPT action + random appearance)
+# Create Scene Content
 # ──────────────────────────────────────────────────────────────────────────
 
 def create_scene_content(theme, action=None):
     """
     Creates a short textual scene describing Chatty in the context of the given theme.
-    Combines GPT's suggested action (if valid) AND the random design from randomize_chatty_appearance().
+    Combines GPT's suggested action (if valid) AND random design from randomize_chatty_appearance().
     """
     base_scene = (
         f"Chatty, a retro CRT monitor with a bright-blue screen face, "
         f"is in a futuristic environment about {theme}. "
         "No text or letters anywhere."
     )
-
-    # Always get our random design variation
     random_appearance = randomize_chatty_appearance()
-
-    # If GPT's action is a fallback or empty, we skip it; otherwise we combine.
     if action and "futuristic task" not in action.lower():
         base_scene += f" Chatty is {action}. Additionally, Chatty is {random_appearance}."
     else:
         base_scene += f" Chatty is {random_appearance}."
-
     return base_scene
 
-###########################################
-# 1) New function: expand_post_with_examples
-###########################################
+# ──────────────────────────────────────────────────────────────────────────
+# Expand Post with Examples (2nd GPT pass)
+# ──────────────────────────────────────────────────────────────────────────
+
 def expand_post_with_examples(original_text):
     """
-    Uses GPT to expand the short post into a more detailed one
-    by adding specific examples or clarifications.
-    Returns a new, more detailed post (still under 280 chars).
+    Uses GPT to expand the short post with specific examples or details, 
+    but strictly ensures the ENTIRE expanded post is under ~230 chars.
     """
-    # A system prompt guiding GPT to produce a more example-rich version
+
     system_prompt = (
         "You are a writing assistant. The user has a short social media post about AI and/or memecoins. "
-        "They want it expanded with more specifics or real-world examples, still under 280 chars. "
-        "Add at least one concrete detail, maintain a cheerful style, and end with a question if it fits. "
-        "Focus on AI or memecoin references, keep it user-friendly, and do NOT exceed 280 characters."
+        "They want it expanded with more specifics or real-world examples, but the entire response must "
+        "stay UNDER 230 characters total, including punctuation. "
+        "Maintain a cheerful style, and end with a question if it fits. "
+        "Focus on AI or memecoin references, keep it user-friendly, and do NOT exceed 230 characters."
     )
 
     user_prompt = (
         f"Original Post:\n'{original_text}'\n\n"
-        "Please expand this post with one or two more specifics or examples, but keep it short and fun."
+        "Please expand this post with one or two more specifics or examples, but strictly under 230 chars."
     )
 
     try:
-        completion = openai.ChatCompletion.create(
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+
+        completion = robust_chat_completion(
+            messages,
             model="gpt-4",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            max_tokens=150,  # Enough to add detail without risking a huge output
+            max_tokens=150,
             temperature=0.7,
             presence_penalty=1.0,
             frequency_penalty=0.5
         )
 
+        if not completion:
+            return original_text
+
         expanded_text = completion.choices[0].message.content.strip()
 
-        # Ensure we still don't exceed 280 chars
-        if len(expanded_text) > 280:
-            expanded_text = expanded_text[:277] + "..."
+        # In case GPT still overshoots, do a final manual cutoff
+        if len(expanded_text) > 230:
+            expanded_text = expanded_text[:227].rstrip() + "..."
         return expanded_text
 
     except openai.error.OpenAIError as e:
@@ -1032,37 +1019,27 @@ def expand_post_with_examples(original_text):
         logger.error(f"Unexpected error in expand_post_with_examples: {e}", exc_info=True)
         return original_text
 
-###########################################
-# 2) Modify post_to_twitter to use the above
-###########################################
+# ──────────────────────────────────────────────────────────────────────────
+# post_to_twitter (with image, 2nd GPT pass)
+# ──────────────────────────────────────────────────────────────────────────
+
 def post_to_twitter(client, post_count, force_image=False):
-    """
-    Posts a tweet. 
-    NOW: Always includes an image for every post,
-    plus uses a second GPT pass to expand the text with examples.
-    """
     try:
-        # 1) Pick a random theme
         theme = random.choice(themes_list)
         logger.info(f"Randomly chosen theme: {theme}")
 
-        # 2) Generate short post
         text_content = generate_themed_post(theme)
-
-        # 3) SECOND GPT PASS: Expand post with examples
         expanded_text = expand_post_with_examples(text_content)
 
-        # 4) Check duplicates if too similar
+        # If too similar, fallback
         if is_too_similar_to_recent_tweets(expanded_text, similarity_threshold=0.95, lookback=10):
             logger.warning("Expanded post is too similar to a recent tweet. Using fallback instead.")
             expanded_text = "Exciting times in AI! Stay tuned, #AICommunity 🤖🚀"
 
-        # 5) Construct the final tweet
         tweet_text = construct_tweet(expanded_text)
 
-        # 6) Always include an image
         logger.info("Including image in this post (every post).")
-        inferred_action = auto_infer_action_from_text(expanded_text)  # optional to pass expanded text
+        inferred_action = auto_infer_action_from_text(expanded_text)
         scene_content = create_scene_content(theme, action=inferred_action)
         img_prompt = create_simplified_image_prompt(scene_content)
         img_url = generate_image(img_prompt)
@@ -1073,7 +1050,6 @@ def post_to_twitter(client, post_count, force_image=False):
         else:
             logger.warning("Failed to generate image. Skipping image for this post.")
 
-        # 7) Post to Twitter
         if image_path:
             try:
                 auth = tweepy.OAuth1UserHandler(
@@ -1111,7 +1087,6 @@ def post_to_twitter(client, post_count, force_image=False):
                 logger.error(f"Error posting tweet without image: {e}", exc_info=True)
                 traceback.print_exc()
 
-        # 8) Store posted tweet, cleanup images, increment
         store_posted_tweet(expanded_text)
         cleanup_images(IMAGE_DIR, max_files=100)
         post_count += 1
@@ -1121,25 +1096,103 @@ def post_to_twitter(client, post_count, force_image=False):
         logger.error(f"Unexpected error in post_to_twitter: {e}", exc_info=True)
         return post_count
 
+# ──────────────────────────────────────────────────────────────────────────
+# handle_comment_with_context with parent/child logic
+# ──────────────────────────────────────────────────────────────────────────
 
+def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None):
+    """
+    1) Rate-limit
+    2) Summaries for long threads
+    3) Post-generation moderation
+    4) Storing new tweets with parent_id
+    """
+    # Rate Limit
+    if not check_rate_limit(user_id):
+        return "Please wait a bit before sending more requests. 🤖"
+
+    if not is_safe_to_respond(comment) or not moderate_content(comment):
+        logger.info(f"Skipping unsafe/filtered comment: {comment}")
+        return "I’m here to discuss AI and technology topics! 🚀✨"
+
+    deflection = deflect_unrelated_comments(comment)
+    if deflection:
+        return deflection
+
+    faq = static_response(comment)
+    if faq:
+        return faq
+
+    # Build conversation path if parent_id is known
+    full_convo = ""
+    if parent_id:
+        full_convo = build_conversation_path(parent_id)
+    short_summary = summarize_text(full_convo)
+
+    system_msg = select_system_prompt()
+    messages = [
+        {"role": "system", "content": system_msg},
+        {
+            "role": "user",
+            "content": (
+                f"Conversation so far (summary):\n{short_summary}\n\n"
+                f"User says: {comment}"
+            )
+        }
+    ]
+    resp = robust_chat_completion(messages, model="gpt-4", max_tokens=150,
+                                  temperature=0.9, presence_penalty=0.7, frequency_penalty=0.5)
+    if not resp:
+        bot_reply = "I’m sorry, I'm having trouble processing right now."
+    else:
+        bot_reply = resp["choices"][0]["message"]["content"].strip()
+
+    bot_reply = moderate_bot_output(bot_reply)
+    log_response(comment, bot_reply)
+
+    # Store the new tweet in DB if tweet_id known
+    if tweet_id:
+        posted_tweets_collection.update_one(
+            {"tweet_id": tweet_id},
+            {"$set": {
+                "text": comment,
+                "parent_id": parent_id
+            }},
+            upsert=True
+        )
+
+    store_user_memory(user_id, bot_reply)
+
+    try:
+        emb = generate_embedding(bot_reply)
+        if emb:
+            embeddings_collection.insert_one({
+                "conversation_context": bot_reply,
+                "embedding": emb,
+                "timestamp": datetime.utcnow()
+            })
+            logger.info("Stored embedding for semantic search.")
+    except Exception as e:
+        logger.error(f"Error storing embedding: {e}", exc_info=True)
+
+    return bot_reply
 
 # ──────────────────────────────────────────────────────────────────────────
-# Responding to Mentions
+# respond_to_mentions
 # ──────────────────────────────────────────────────────────────────────────
 
 def respond_to_mentions(client, since_id):
-    """
-    Responds to user mentions while skipping unsafe or spammy content.
-    """
     try:
         me = client.get_me()
-        user_id = me.data.id
-        logger.info(f"Bot User ID: {user_id}")
+        bot_user_id = me.data.id
+        logger.info(f"Bot User ID: {bot_user_id}")
 
         params = {
             'expansions': ['author_id', 'in_reply_to_user_id', 'referenced_tweets.id'],
-            'tweet_fields': ['id', 'author_id', 'conversation_id', 'in_reply_to_user_id',
-                             'referenced_tweets', 'text', 'created_at'],
+            'tweet_fields': [
+                'id','author_id','conversation_id','in_reply_to_user_id',
+                'referenced_tweets','text','created_at'
+            ],
             'user_fields': ['username'],
             'max_results': 100
         }
@@ -1147,7 +1200,7 @@ def respond_to_mentions(client, since_id):
             params['since_id'] = since_id
 
         logger.info("Fetching recent mentions...")
-        mentions_resp = client.get_users_mentions(id=user_id, **params)
+        mentions_resp = client.get_users_mentions(id=bot_user_id, **params)
         if not mentions_resp.data:
             logger.info("No new mentions found.")
             return since_id
@@ -1163,14 +1216,16 @@ def respond_to_mentions(client, since_id):
         for mention in mentions_resp.data:
             mention_id = mention.id
             author_id = mention.author_id
-            username = user_map.get(author_id)
+            username = user_map.get(author_id, "unknown_user")
+
             logger.info(f"Processing mention {mention_id} from author {author_id} (@{username})")
 
+            # Check if we already responded
             if mentions_collection.find_one({'tweet_id': mention_id}):
                 logger.info(f"Already responded to mention {mention_id}. Skipping.")
                 continue
 
-            if author_id == user_id:
+            if author_id == bot_user_id:
                 logger.info(f"Skipping mention {mention_id} from self.")
                 continue
 
@@ -1178,14 +1233,24 @@ def respond_to_mentions(client, since_id):
                 logger.info(f"Skipped mention due to prohibited content: {mention.text}")
                 continue
 
-            reply_text = handle_comment_with_context(author_id, mention.text)
+            # Grab parent if any
+            parent_id = None
+            if mention.referenced_tweets:
+                parent_id = mention.referenced_tweets[0].id
+
+            reply_text = handle_comment_with_context(
+                user_id=author_id,
+                comment=mention.text,
+                tweet_id=mention_id,
+                parent_id=parent_id
+            )
             if reply_text:
                 full_reply = f"@{username} {reply_text}"
                 max_len = 280 - len(f"@{username} ")
-                full_reply = truncate_to_last_sentence(full_reply, max_length=max_len)
-                logger.debug(f"Reply Text: {full_reply}")
+                final_reply = truncate_tweet(full_reply, max_length=max_len)
+                logger.debug(f"Reply Text: {final_reply}")
                 try:
-                    client.create_tweet(text=full_reply, in_reply_to_tweet_id=mention_id)
+                    client.create_tweet(text=final_reply, in_reply_to_tweet_id=mention_id)
                     logger.info(f"Replied to mention {mention_id}")
                     mentions_collection.insert_one({'tweet_id': mention_id, 'replied_at': datetime.utcnow()})
                 except Exception as e:
@@ -1199,8 +1264,35 @@ def respond_to_mentions(client, since_id):
         return since_id
 
 # ──────────────────────────────────────────────────────────────────────────
-# Scheduling
+# Scheduling + since_id Persistence
 # ──────────────────────────────────────────────────────────────────────────
+
+def load_since_id(file_name):
+    """
+    Reads the 'since_id' from a file to know where we left off 
+    in fetching new mentions.
+    """
+    if os.path.exists(file_name):
+        with open(file_name, 'r') as f:
+            try:
+                return int(f.read().strip())
+            except ValueError:
+                logger.warning(f"Invalid since_id in {file_name}. Resetting to None.")
+                return None
+    else:
+        return None
+
+def save_since_id(file_name, since_id):
+    """
+    Persists the 'since_id' to a file so we remember where we left off 
+    in fetching new mentions.
+    """
+    try:
+        with open(file_name, 'w', encoding='utf-8') as f:
+            f.write(str(since_id))
+        logger.info(f"Updated since_id in {file_name} to {since_id}.")
+    except Exception as e:
+        logger.error(f"Error saving since_id to {file_name}: {e}", exc_info=True)
 
 def posting_task(client, post_count):
     logger.info("Starting scheduled posting task.")
