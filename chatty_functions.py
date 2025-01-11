@@ -605,22 +605,22 @@ def truncate_to_last_sentence(text, max_length=280):
 def construct_tweet(text_content):
     """
     1. Strip out any existing hashtags in the text_content.
-    2. Append exactly 3 tags at the end:
+    2. Append exactly 2 tags at the end:
        - Always include '@chattyonsolana'
-       - Randomly choose 2 from a predefined list
+       - Randomly choose 1 from a predefined list
     3. Ensure tweet stays within 280 characters; if it exceeds,
-       truncate the main text (word boundary) before adding the 3 tags.
+       truncate the main text (word boundary) before adding the 2 tags.
     """
     # 1) Remove old hashtags
     no_hashtags = re.sub(r"#\w+", "", text_content).strip()
 
-    # 2) Always include '@chattyonsolana' + 2 random picks
+    # 2) Always include '@chattyonsolana' + 1 random pick
     extra_tags_pool = [
         "#HeyChatty", "#AIforEveryone", "#MEMECOIN", "$CHATTY",
         "#AImeme", "#AIagent", "@OpenAI", "@ChatGPTapp"
     ]
-    picks = random.sample(extra_tags_pool, 2)
-    tags = ["@chattyonsolana"] + picks
+    pick = random.choice(extra_tags_pool)
+    tags = ["@chattyonsolana", pick]
 
     # 3) Build a draft tweet
     draft_tweet = f"{no_hashtags} {' '.join(tags)}"
@@ -640,6 +640,7 @@ def construct_tweet(text_content):
         final_tweet = draft_tweet
 
     return final_tweet
+
 
 # ──────────────────────────────────────────────────────────────────────────
 # Image Cleanup
@@ -982,50 +983,97 @@ def create_scene_content(theme, action=None):
 
     return base_scene
 
-# ──────────────────────────────────────────────────────────────────────────
-# Posting to Twitter
-# ──────────────────────────────────────────────────────────────────────────
+###########################################
+# 1) New function: expand_post_with_examples
+###########################################
+def expand_post_with_examples(original_text):
+    """
+    Uses GPT to expand the short post into a more detailed one
+    by adding specific examples or clarifications.
+    Returns a new, more detailed post (still under 280 chars).
+    """
+    # A system prompt guiding GPT to produce a more example-rich version
+    system_prompt = (
+        "You are a writing assistant. The user has a short social media post about AI and/or memecoins. "
+        "They want it expanded with more specifics or real-world examples, still under 280 chars. "
+        "Add at least one concrete detail, maintain a cheerful style, and end with a question if it fits. "
+        "Focus on AI or memecoin references, keep it user-friendly, and do NOT exceed 280 characters."
+    )
 
+    user_prompt = (
+        f"Original Post:\n'{original_text}'\n\n"
+        "Please expand this post with one or two more specifics or examples, but keep it short and fun."
+    )
+
+    try:
+        completion = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            max_tokens=150,  # Enough to add detail without risking a huge output
+            temperature=0.7,
+            presence_penalty=1.0,
+            frequency_penalty=0.5
+        )
+
+        expanded_text = completion.choices[0].message.content.strip()
+
+        # Ensure we still don't exceed 280 chars
+        if len(expanded_text) > 280:
+            expanded_text = expanded_text[:277] + "..."
+        return expanded_text
+
+    except openai.error.OpenAIError as e:
+        logger.error(f"Error expanding post with examples: {e}", exc_info=True)
+        return original_text  # fallback
+    except Exception as e:
+        logger.error(f"Unexpected error in expand_post_with_examples: {e}", exc_info=True)
+        return original_text
+
+###########################################
+# 2) Modify post_to_twitter to use the above
+###########################################
 def post_to_twitter(client, post_count, force_image=False):
     """
-    Posts a tweet. Every 3rd post includes an image (or override with force_image=True).
+    Posts a tweet. 
+    NOW: Always includes an image for every post,
+    plus uses a second GPT pass to expand the text with examples.
     """
     try:
-        # 1) Pick a random theme from the newly loaded JSON-based themes_list
+        # 1) Pick a random theme
         theme = random.choice(themes_list)
         logger.info(f"Randomly chosen theme: {theme}")
 
-        # 2) Generate short post for this theme
+        # 2) Generate short post
         text_content = generate_themed_post(theme)
 
-        # 3) Avoid duplicates if too similar
-        if is_too_similar_to_recent_tweets(text_content, similarity_threshold=0.95, lookback=10):
-            logger.warning("Themed post is too similar to a recent tweet. Using fallback instead.")
-            text_content = "Exciting times in AI! Stay tuned, #AICommunity 🤖🚀"
+        # 3) SECOND GPT PASS: Expand post with examples
+        expanded_text = expand_post_with_examples(text_content)
 
-        # 4) Construct final tweet
-        tweet_text = construct_tweet(text_content)
+        # 4) Check duplicates if too similar
+        if is_too_similar_to_recent_tweets(expanded_text, similarity_threshold=0.95, lookback=10):
+            logger.warning("Expanded post is too similar to a recent tweet. Using fallback instead.")
+            expanded_text = "Exciting times in AI! Stay tuned, #AICommunity 🤖🚀"
 
-        # 5) Decide whether to attach an image
-        include_image = force_image or ((post_count + 1) % 3 == 0)
+        # 5) Construct the final tweet
+        tweet_text = construct_tweet(expanded_text)
+
+        # 6) Always include an image
+        logger.info("Including image in this post (every post).")
+        inferred_action = auto_infer_action_from_text(expanded_text)  # optional to pass expanded text
+        scene_content = create_scene_content(theme, action=inferred_action)
+        img_prompt = create_simplified_image_prompt(scene_content)
+        img_url = generate_image(img_prompt)
         image_path = None
 
-        if include_image:
-            logger.info("Including image in this post.")
-            # GPT-based action
-            inferred_action = auto_infer_action_from_text(text_content)
-            # Combine GPT's action + random appearance
-            scene_content = create_scene_content(theme, action=inferred_action)
-            # Build DALL·E prompt
-            img_prompt = create_simplified_image_prompt(scene_content)
-            # Generate + download
-            img_url = generate_image(img_prompt)
-            if img_url:
-                image_path = download_image(img_url, img_prompt)
-            else:
-                logger.warning("Failed to generate image. Skipping image for this post.")
+        if img_url:
+            image_path = download_image(img_url, img_prompt)
+        else:
+            logger.warning("Failed to generate image. Skipping image for this post.")
 
-        # 6) Post to Twitter
+        # 7) Post to Twitter
         if image_path:
             try:
                 auth = tweepy.OAuth1UserHandler(
@@ -1063,19 +1111,17 @@ def post_to_twitter(client, post_count, force_image=False):
                 logger.error(f"Error posting tweet without image: {e}", exc_info=True)
                 traceback.print_exc()
 
-        # 7) Store posted tweet to avoid duplicates
-        store_posted_tweet(text_content)
-
-        # 8) Clean up old images
+        # 8) Store posted tweet, cleanup images, increment
+        store_posted_tweet(expanded_text)
         cleanup_images(IMAGE_DIR, max_files=100)
-
-        # 9) Increment post_count
         post_count += 1
         return post_count
 
     except Exception as e:
         logger.error(f"Unexpected error in post_to_twitter: {e}", exc_info=True)
         return post_count
+
+
 
 # ──────────────────────────────────────────────────────────────────────────
 # Responding to Mentions
