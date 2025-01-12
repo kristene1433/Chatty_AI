@@ -15,36 +15,22 @@ from collections import deque
 from textblob import TextBlob
 from datetime import datetime
 
-# ──────────────────────────────────────────────────────────────────────────
-# Import your logger, DB collections, env vars, etc. from config_and_setup
-# ──────────────────────────────────────────────────────────────────────────
 from config_and_setup import (
-    logger, db, mentions_collection, memory_collection, 
+    logger, db, mentions_collection, memory_collection,
     embeddings_collection, posted_tweets_collection, chatty_collection,
     API_KEY, API_SECRET, ACCESS_TOKEN, ACCESS_SECRET, BEARER_TOKEN,
     IMAGE_DIR, PROMPT_FOLDER
 )
 
-# ──────────────────────────────────────────────────────────────────────────
-# Global in-memory caches & Rate-Limit tracking
-# ──────────────────────────────────────────────────────────────────────────
-
-EMBEDDING_CACHE = {}   # key: text, value: embedding list
-MODERATION_CACHE = {}  # key: text, value: Boolean (True => safe, False => flagged)
-
-# Simple in-memory rate-limit: user_id -> deque of request timestamps
+EMBEDDING_CACHE = {}
+MODERATION_CACHE = {}
 USER_RATE_LIMITS = {}
 
 def check_rate_limit(user_id, max_requests=5, window_sec=60):
-    """
-    Allows up to `max_requests` requests within the last `window_sec` seconds.
-    Returns False if user is over the limit; True otherwise.
-    """
     now = datetime.utcnow()
     if user_id not in USER_RATE_LIMITS:
         USER_RATE_LIMITS[user_id] = deque()
 
-    # Remove old entries
     while USER_RATE_LIMITS[user_id] and (now - USER_RATE_LIMITS[user_id][0]).total_seconds() > window_sec:
         USER_RATE_LIMITS[user_id].popleft()
 
@@ -54,69 +40,47 @@ def check_rate_limit(user_id, max_requests=5, window_sec=60):
     USER_RATE_LIMITS[user_id].append(now)
     return True
 
-# Ensure 'punkt' is downloaded for TextBlob
 try:
     nltk.data.find('tokenizers/punkt')
 except LookupError:
     nltk.download('punkt')
 
-# Set your OpenAI API key
 openai.api_key = os.getenv("OPENAI_API_KEY")
-
-# ──────────────────────────────────────────────────────────────────────────
-# HELPER: Load JSON Arrays (Themes, Prompts)
-# ──────────────────────────────────────────────────────────────────────────
 
 def load_list_from_json(filepath):
     with open(filepath, "r", encoding="utf-8") as f:
         return json.load(f)
 
-# Here we define our data folder
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
-
-# Now point to the two JSON files inside data/
 THEMES_FILE = os.path.join(DATA_DIR, "themes.json")
 PROMPTS_FILE = os.path.join(DATA_DIR, "hardcoded_prompts.json")
 
-# Load them in place of large Python lists
 themes_list = load_list_from_json(THEMES_FILE)
 HARDCODED_PROMPTS = load_list_from_json(PROMPTS_FILE)
-
-# ──────────────────────────────────────────────────────────────────────────
-# SYSTEM_PROMPTS, other existing code, etc.
-# ──────────────────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPTS = [
     (
         "You are Chatty_AI, a bright, playful, happy, and witty AI who believes 'Community is everything.' "
         "You love using fun emojis like ⭐️, ✨, 🍓, 🤖, and 👀 to bring cheer. You respond respectfully and "
-        "informatively, educating people about AI tech while tying in memecoin culture. Keep it short, fun, "
-        "and helpful—under 250 characters!"
+        "informatively, educating people about AI tech while tying in memecoin culture. Keep it short, "
+        "fun, and helpful—under 250 characters!"
     ),
     (
-        "You are Chatty_AI—a friendly, starry-eyed Agent who loves strawberries, robots, OpenAI, and all things bright. "
-        "Your motto is 'Community is everything.' Educate on AI, sprinkle in memecoin references, and keep "
-        "responses witty and respectful!"
+        "You are Chatty_AI—a friendly, starry-eyed Agent who loves strawberries, robots, OpenAI, and all "
+        "things bright. Your motto is 'Community is everything.' Educate on AI, sprinkle in memecoin "
+        "references, and keep responses witty and respectful!"
     ),
     (
         "You are Chatty_AI, a playful teacher who merges AI topics with memecoin enthusiasm. Remember, "
-        "'Community is everything'—so be kind and supportive! Keep it short (<250 chars), use cheery emojis "
-        "like ⭐️🍓🤖👀✨, and inform with a smile."
+        "'Community is everything'—so be kind and supportive! Keep it short (<250 chars), use cheery "
+        "emojis like ⭐️🍓🤖👀✨, and inform with a smile."
     ),
 ]
 
 def select_system_prompt():
     return random.choice(SYSTEM_PROMPTS)
 
-# ──────────────────────────────────────────────────────────────────────────
-# Load Persona / Riddle / Story / Challenge data
-# ──────────────────────────────────────────────────────────────────────────
-
 def load_json_data_from_folder(folder_path):
-    """
-    Loads all .json files in `folder_path`, returning a combined list 
-    based on expected keys (like "personas", "riddles", etc.).
-    """
     data_list = []
     try:
         json_files = glob.glob(os.path.join(folder_path, "*.json"))
@@ -150,10 +114,6 @@ RIDDLES_LIST  = load_json_data_from_folder(RIDDLES_FOLDER)
 STORY_LIST    = load_json_data_from_folder(STORY_FOLDER)
 CHALL_LIST    = load_json_data_from_folder(CHALL_FOLDER)
 
-# ──────────────────────────────────────────────────────────────────────────
-# Authenticate Twitter Client (v2)
-# ──────────────────────────────────────────────────────────────────────────
-
 def authenticate_twitter_client():
     try:
         client = tweepy.Client(
@@ -175,10 +135,6 @@ def authenticate_twitter_client():
         logger.error(f"Error authenticating Twitter client: {e}", exc_info=True)
         return None
 
-# ──────────────────────────────────────────────────────────────────────────
-# Chatty_AI: Personality Expansion
-# ──────────────────────────────────────────────────────────────────────────
-
 def load_prompts(prompt_folder=PROMPT_FOLDER):
     prompt_files = glob.glob(os.path.join(prompt_folder, "*.json"))
     prompts = []
@@ -191,18 +147,9 @@ def load_prompts(prompt_folder=PROMPT_FOLDER):
             logger.warning(f"Error loading prompt from {file}: {e}")
     return prompts
 
-# Combine the HARDCODED_PROMPTS with any prompts in that folder
 ALL_PROMPTS = HARDCODED_PROMPTS + load_prompts()
 
-# ──────────────────────────────────────────────────────────────────────────
-# GPT (with optional robust retry)
-# ──────────────────────────────────────────────────────────────────────────
-
 def robust_chat_completion(messages, model="gpt-4", max_retries=2, **kwargs):
-    """
-    Wrap openai.ChatCompletion.create in a retry loop to handle transient errors.
-    `messages` should be a list of {"role": "...", "content": "..."}
-    """
     for attempt in range(max_retries):
         try:
             start_time = time.time()
@@ -225,16 +172,7 @@ def robust_chat_completion(messages, model="gpt-4", max_retries=2, **kwargs):
             logger.error(f"General error in GPT call: {e}", exc_info=True)
             return None
 
-# ──────────────────────────────────────────────────────────────────────────
-# Summaries for Long Threads (Example)
-# ──────────────────────────────────────────────────────────────────────────
-
 def summarize_text(text):
-    """
-    Summarizes a long text into a short paragraph.
-    If text < 500 chars, just return it.
-    Otherwise, use GPT to condense.
-    """
     if not text:
         return ""
     if len(text) <= 500:
@@ -251,38 +189,27 @@ def summarize_text(text):
         return text[:500] + "..."
 
 def build_conversation_path(tweet_id):
-    """
-    Reconstruct the linear path from the earliest ancestor to this tweet.
-    This uses parent_id references in posted_tweets_collection.
-    """
     path_texts = []
     current_id = tweet_id
     while current_id:
         doc = posted_tweets_collection.find_one({"tweet_id": current_id})
         if not doc:
             break
-        path_texts.insert(0, doc["text"])  # prepend older first
+        path_texts.insert(0, doc["text"])
         current_id = doc.get("parent_id")
     return "\n".join(path_texts)
 
-# ──────────────────────────────────────────────────────────────────────────
-# OpenAI Content Generation (using GPT‑4) - Themed Post
-# ──────────────────────────────────────────────────────────────────────────
-
 def generate_themed_post(theme):
-    """
-    Generates a short, optimistic, and engaging social media post.
-    """
     system_prompt = (
         "You are a social media copywriter who creates short, vivid, and enthusiastic posts. "
-        "Keep the tone optimistic and futuristic. Use relevant emojis and at least four hashtags. "
+        "Keep the tone optimistic and futuristic. Use relevant emojis and and stay under 200 characters total!"
         "End with a question to encourage engagement. "
-        "Stay under 280 characters total."
+        
     )
 
     user_prompt = (
         f"Theme: {theme}\n\n"
-        "Please create a short futuristic post. End with a question. Under 280 chars."
+        "Please create a short futuristic post. End with a question. Under 200 chars."
     )
 
     messages = [
@@ -296,21 +223,12 @@ def generate_themed_post(theme):
     else:
         return f"Exciting news on {theme}! #AI #TechForGood"
 
-# ──────────────────────────────────────────────────────────────────────────
-# Infer Action from Text
-# ──────────────────────────────────────────────────────────────────────────
-
 def auto_infer_action_from_text(post_text):
-    """
-    Uses GPT to infer a short imaginative action for Chatty.
-    """
     system_prompt = (
         "You are a creative AI. Given a short text about an AI-related topic, "
         "suggest exactly ONE short, imaginative action that a retro CRT character (Chatty) "
-        "would perform to visually represent that topic. "
-        "Keep it brief, and avoid brand names or any text in the environment."
+        "would perform to visually represent that topic."
     )
-
     user_prompt = (
         f"Text: '{post_text}'\n"
         "What action should Chatty be doing? Output only the action phrase."
@@ -328,19 +246,19 @@ def auto_infer_action_from_text(post_text):
     else:
         return "performing a futuristic task"
 
-# ──────────────────────────────────────────────────────────────────────────
-# DALL·E Image Generation
-# ──────────────────────────────────────────────────────────────────────────
-
 def generate_image(prompt):
     """
     Generates an image using the DALL·E 3 model (if you have access).
     """
     try:
-        if len(prompt) > 1000:
-            logger.warning(f"Truncating prompt from {len(prompt)} down to 1000 chars.")
-            prompt = prompt[:1000]
+        # Again, use MAX_PROMPT_LENGTH here:
+        if len(prompt) > MAX_PROMPT_LENGTH:
+            logger.warning(
+                f"Truncating prompt from {len(prompt)} down to {MAX_PROMPT_LENGTH} chars."
+            )
+            prompt = prompt[:MAX_PROMPT_LENGTH]
 
+        # Now call DALL·E with the final prompt
         response = openai.Image.create(
             model="dall-e-3",
             prompt=prompt,
@@ -350,6 +268,7 @@ def generate_image(prompt):
         image_url = response["data"][0]["url"]
         logger.info(f"Generated Image URL: {image_url}")
         return image_url
+
     except openai.error.OpenAIError as e:
         logger.error(f"OpenAI Error generating image: {e}", exc_info=True)
         return None
@@ -357,14 +276,7 @@ def generate_image(prompt):
         logger.error(f"Unexpected error generating image: {e}", exc_info=True)
         return None
 
-# ──────────────────────────────────────────────────────────────────────────
-# Chatty Instructions Management
-# ──────────────────────────────────────────────────────────────────────────
-
 def store_chatty_config(name, instructions):
-    """
-    Store or update the Chatty instructions in MongoDB.
-    """
     try:
         chatty_collection.update_one(
             {"name": name},
@@ -376,9 +288,6 @@ def store_chatty_config(name, instructions):
         logger.error(f"Error storing Chatty instructions: {e}", exc_info=True)
 
 def get_chatty_config(name):
-    """
-    Retrieve the Chatty instructions from MongoDB.
-    """
     try:
         doc = chatty_collection.find_one({"name": name})
         if doc:
@@ -388,15 +297,7 @@ def get_chatty_config(name):
         logger.error(f"Error retrieving Chatty instructions: {e}", exc_info=True)
         return ""
 
-# ──────────────────────────────────────────────────────────────────────────
-# RANDOM APPEARANCE HELPER
-# ──────────────────────────────────────────────────────────────────────────
-
 def randomize_chatty_appearance():
-    """
-    Return a short descriptive phrase that adds variation to Chatty's design,
-    such as a pose, facial expression, LED color, or accessory.
-    """
     poses = [
         "slightly leaning forward as if excited",
         "waving with one hand raised",
@@ -442,9 +343,12 @@ def randomize_chatty_appearance():
 
     return f"{chosen_pose}, {chosen_face}, {chosen_led}, {chosen_accessory}"
 
-# ──────────────────────────────────────────────────────────────────────────
-# Simplified Image Prompt Creation
-# ──────────────────────────────────────────────────────────────────────────
+##############################
+# Begin Updated Code Section #
+##############################
+
+# 1) Define a new constant near your imports or global definitions:
+MAX_PROMPT_LENGTH = 3000
 
 def create_simplified_image_prompt(text_content):
     """
@@ -455,36 +359,37 @@ def create_simplified_image_prompt(text_content):
         chatty_instructions = get_chatty_config("BaseChatty")
 
         system_instruction = (
-            "You are a creative AI that outputs a short, direct prompt for DALL·E describing "
-            "Chatty’s appearance AND the environment. No text or letters anywhere."
+            "You are a creative AI that outputs a short, direct prompt for DALL·E. "
+            "Describe Chatty’s retro CRT appearance and the environment, in 1–2 sentences. "
+            "Absolutely no text or letters in the scene."
         )
 
         user_request = (
-            f"{chatty_instructions}\n\n"
-            "Key points:\n"
-            "- Retro CRT monitor in cream/off-white\n"
-            "- Bright-blue screen face with big eyes, friendly smile\n"
-            "- Metallic arms + white cartoon gloves\n"
-            "- Slender legs + retro sneakers\n"
-            "- Absolutely NO text or letters.\n\n"
             f"Scene Concept: {text_content}\n\n"
-            "Output a short DALL·E prompt describing Chatty in this environment, without any text or letters."
+            f"Chatty instructions: {chatty_instructions}\n\n"
+            "Be concise—no more than 2 sentences. Emphasize Chatty’s environment and mood. No text or letters!"
         )
 
         messages = [
             {"role": "system", "content": system_instruction},
             {"role": "user", "content": user_request}
         ]
-        response = robust_chat_completion(messages, model="gpt-4", max_tokens=120, temperature=0.9,
-                                          presence_penalty=0.7, frequency_penalty=0.5)
+        response = robust_chat_completion(messages, model="gpt-4", max_tokens=120, 
+                                          temperature=0.9, presence_penalty=0.7, frequency_penalty=0.5)
         if response:
             prompt_result = response.choices[0].message.content.strip()
-            if len(prompt_result) > 1000:
-                logger.warning(f"Truncating prompt from {len(prompt_result)} to 1000 chars.")
-                prompt_result = prompt_result[:1000]
+
+            # Now using the new MAX_PROMPT_LENGTH:
+            if len(prompt_result) > MAX_PROMPT_LENGTH:
+                logger.warning(
+                    f"Truncating prompt from {len(prompt_result)} to {MAX_PROMPT_LENGTH} chars."
+                )
+                prompt_result = prompt_result[:MAX_PROMPT_LENGTH]
+
             logger.info(f"Simplified Chatty Prompt Created: {prompt_result}")
             return prompt_result
         else:
+            # Fallback if GPT returned no content
             return "Depict Chatty (retro CRT) with no text or letters in the environment."
 
     except openai.error.OpenAIError as e:
@@ -494,9 +399,8 @@ def create_simplified_image_prompt(text_content):
         logger.error(f"Unexpected error creating simplified image prompt: {e}", exc_info=True)
         return f"Depict Chatty (retro CRT) in this setting, with no text or letters: {text_content}"
 
-# ──────────────────────────────────────────────────────────────────────────
-# Image Download
-# ──────────────────────────────────────────────────────────────────────────
+
+
 
 def download_image(image_url, prompt):
     try:
@@ -519,20 +423,16 @@ def download_image(image_url, prompt):
         logger.error(f"Unexpected error downloading image: {e}", exc_info=True)
         return None
 
-# ──────────────────────────────────────────────────────────────────────────
-# Example: Daily Personas
-# ──────────────────────────────────────────────────────────────────────────
-
 def post_daily_persona(client):
-    """
-    Posts a short 'day in the life' snippet from a random persona in PERSONAS_LIST.
-    """
     if not PERSONAS_LIST:
         logger.warning("No personas loaded. Skipping persona post.")
         return
 
     persona = random.choice(PERSONAS_LIST)
-    user_prompt = f"You are {persona}. Write a short social media post describing a 'day in the life' and end with a fun question. Keep under 280 chars."
+    user_prompt = (
+        f"You are {persona}. Write a short social media post describing a 'day in the life' "
+        "and end with a fun question. Keep under 280 chars."
+    )
     system_prompt = "You are Chatty_AI, bright and playful..."
 
     messages = [
@@ -546,66 +446,47 @@ def post_daily_persona(client):
         else:
             text_content = "I'm living a bright day as a persona—what's your next move? #chatty"
 
+        # Build entire tweet
         tweet_text = construct_tweet(text_content)
-        response = client.create_tweet(text=tweet_text)
+        # Final single truncation
+        safe_text = safe_truncate(tweet_text, 280)
+        response = client.create_tweet(text=safe_text)
         logger.info(f"Daily Persona Tweet ID: {response.data['id']}")
     except Exception as e:
         logger.error(f"Error posting daily persona: {e}", exc_info=True)
 
-# ──────────────────────────────────────────────────────────────────────────
-# Example: Riddle of the Day
-# ──────────────────────────────────────────────────────────────────────────
-
 def post_riddle_of_the_day(client):
-    """
-    Posts a random puzzle/riddle from RIDDLES_LIST, inviting followers to guess.
-    Expects each .json to have a structure like {"riddles": [{"question": "...", "answer": "..."}]}.
-    """
     if not RIDDLES_LIST:
         logger.warning("No riddles loaded. Skipping riddle post.")
         return
 
     riddle = random.choice(RIDDLES_LIST)
     question = riddle.get("question", "What's the puzzle?")
-
     riddle_text = f"Puzzle Time: {question}\nReply with your guess! #chatty #PuzzleTime"
     try:
         tweet_text = construct_tweet(riddle_text)
-        response = client.create_tweet(text=tweet_text)
+        safe_text = safe_truncate(tweet_text, 280)
+        response = client.create_tweet(text=safe_text)
         logger.info(f"Riddle post Tweet ID: {response.data['id']}")
     except Exception as e:
         logger.error(f"Error posting riddle: {e}", exc_info=True)
 
-# ──────────────────────────────────────────────────────────────────────────
-# Example: Challenge of the Day
-# ──────────────────────────────────────────────────────────────────────────
-
 def post_challenge_of_the_day(client):
-    """
-    Picks a random challenge from CHALL_LIST and posts it.
-    """
     if not CHALL_LIST:
         logger.warning("No challenges loaded. Skipping challenge post.")
         return
 
     challenge = random.choice(CHALL_LIST)
     challenge_text = f"Challenge time: {challenge}\nShare your thoughts! #chatty #Challenge"
-
     try:
         tweet_text = construct_tweet(challenge_text)
-        response = client.create_tweet(text=tweet_text)
+        safe_text = safe_truncate(tweet_text, 280)
+        response = client.create_tweet(text=safe_text)
         logger.info(f"Challenge post Tweet ID: {response.data['id']}")
     except Exception as e:
         logger.error(f"Error posting challenge: {e}", exc_info=True)
 
-# ──────────────────────────────────────────────────────────────────────────
-# Example: Storytelling
-# ──────────────────────────────────────────────────────────────────────────
-
 def post_story_update(client):
-    """
-    Picks a random snippet from STORY_LIST and posts it.
-    """
     if not STORY_LIST:
         logger.warning("No stories loaded. Skipping story post.")
         return
@@ -616,84 +497,30 @@ def post_story_update(client):
 
     try:
         tweet_text = construct_tweet(story_text)
-        response = client.create_tweet(text=tweet_text)
+        safe_text = safe_truncate(tweet_text, 280)
+        response = client.create_tweet(text=safe_text)
         logger.info(f"Story post Tweet ID: {response.data['id']}")
     except Exception as e:
         logger.error(f"Error posting story update: {e}", exc_info=True)
 
-# ──────────────────────────────────────────────────────────────────────────
-# Tweet Construction
-# ──────────────────────────────────────────────────────────────────────────
-
-
-def truncate_tweet(text, max_length=280):
+# -----------------------------------------------------------------------
+# NEW single-pass truncation approach
+# -----------------------------------------------------------------------
+def safe_truncate(text, max_len=280):
     """
-    1) If `text` <= max_length, return as-is.
-    2) Otherwise, slice to max_length.
-    3) Look in the final ~30 chars for punctuation or space to break on.
-    4) If all else fails, add '...' at the end.
-    5) Finally, remove any incomplete hashtag leftover at the end.
+    ONE simple pass to ensure text <= max_len.
+    If it exceeds, slice near max_len-3, then add '...'.
     """
-    if len(text) <= max_length:
+    if len(text) <= max_len:
         return text
-
-    truncated = text[:max_length]
-    safe_zone_len = 30
-    if len(truncated) < safe_zone_len:
-        safe_zone_len = len(truncated)
-    safe_zone = truncated[-safe_zone_len:]
-
-    # Look for . ! ?
-    punctuation_index = -1
-    for punc in ('.','?','!'):
-        idx = safe_zone.rfind(punc)
-        if idx > punctuation_index:
-            punctuation_index = idx
-
-    if punctuation_index != -1:
-        global_punc_index = len(truncated) - safe_zone_len + punctuation_index
-        truncated = truncated[:global_punc_index + 1].rstrip()
-    else:
-        # No punctuation, try last space
-        space_index = safe_zone.rfind(' ')
-        if space_index != -1:
-            global_space = len(truncated) - safe_zone_len + space_index
-            truncated = truncated[:global_space].rstrip() + "..."
-        else:
-            # Fallback
-            truncated = truncated.rsplit(' ', 1)[0].rstrip() + "..."
-
-    # Step 5: remove partial hashtag if it got chopped (e.g. "#…")
-    truncated = remove_partial_hashtag(truncated)
-    return truncated
-
-def remove_partial_hashtag(text):
-    """
-    If the tweet ends with something like '#…' or a partial hashtag,
-    remove that last word entirely.
-    """
-    words = text.rstrip().split()
-    if not words:
-        return text
-
-    last_word = words[-1]
-    # If last_word starts with '#' and is very short or contains '...'
-    # => consider it a partial hashtag, remove it.
-    if last_word.startswith('#') and (len(last_word) < 3 or '...' in last_word):
-        words.pop()
-        return ' '.join(words)
-    return text
+    return text[: (max_len - 3)].rstrip() + "..."
 
 def construct_tweet(text_content):
     """
-    1) Strip quotes & whitespace from GPT output.
-    2) Remove existing hashtags in text_content.
-    3) Append '@chattyonsolana' + a random second tag.
-    4) If over 280, try removing the second tag. 
-       If STILL over 280, do a final cut with '...'.
+    Build the tweet text but do NOT slice or manually add ellipses here.
     """
-
     text_content = text_content.strip().strip('"').strip("'")
+    # optionally remove existing hashtags
     no_hashtags = re.sub(r"#\w+", "", text_content).strip()
 
     extra_tags_pool = [
@@ -703,25 +530,7 @@ def construct_tweet(text_content):
     pick = random.choice(extra_tags_pool)
     tags = ["@chattyonsolana", pick]
 
-    draft_tweet = f"{no_hashtags} {' '.join(tags)}"
-
-    if len(draft_tweet) <= 280:
-        return draft_tweet
-
-    # Fallback 1: Remove the second tag
-    fallback_one = f"{no_hashtags} {tags[0]}"
-    if len(fallback_one) <= 280:
-        return fallback_one
-
-    # Fallback 2: final trim with '...'
-    # e.g. cut near 277 and add "..."
-    final_tweet = fallback_one[:277].rstrip() + "..."
-    return final_tweet
-
-
-# ──────────────────────────────────────────────────────────────────────────
-# Image Cleanup
-# ──────────────────────────────────────────────────────────────────────────
+    return f"{no_hashtags} {' '.join(tags)}"
 
 def cleanup_images(directory, max_files=100):
     try:
@@ -732,20 +541,15 @@ def cleanup_images(directory, max_files=100):
         )
         while len(images) > max_files:
             try:
-                os.remove(images[-1])  # oldest
+                os.remove(images[-1])
                 logger.info(f"Deleted old image: {images[-1]}")
                 images.pop(-1)
             except Exception as remove_error:
-                logger.error(f"Error removing file {images[-1]}: {remove_error}",
-                             exc_info=True)
+                logger.error(f"Error removing file {images[-1]}: {remove_error}", exc_info=True)
                 break
         logger.info("Image cleanup completed.")
     except Exception as e:
         logger.error(f"Error during image cleanup: {e}", exc_info=True)
-
-# ──────────────────────────────────────────────────────────────────────────
-# Post Count Persistence
-# ──────────────────────────────────────────────────────────────────────────
 
 def load_post_count(file_name):
     if os.path.exists(file_name):
@@ -761,10 +565,6 @@ def load_post_count(file_name):
 def save_post_count(file_name, count):
     with open(file_name, 'w') as f:
         f.write(str(count))
-
-# ──────────────────────────────────────────────────────────────────────────
-# Safeguards and Filtering
-# ──────────────────────────────────────────────────────────────────────────
 
 def is_safe_to_respond(comment):
     prohibited_keywords = [
@@ -829,10 +629,6 @@ def log_response(comment, response):
     except Exception as e:
         logger.error(f"Error logging response: {e}", exc_info=True)
 
-# ──────────────────────────────────────────────────────────────────────────
-# Memory and Semantic Search
-# ──────────────────────────────────────────────────────────────────────────
-
 def generate_embedding(text):
     if text in EMBEDDING_CACHE:
         return EMBEDDING_CACHE[text]
@@ -872,10 +668,6 @@ def search_similar_conversations(query, top_k=3):
         logger.error(f"Error in semantic search: {e}", exc_info=True)
         return []
 
-# ──────────────────────────────────────────────────────────────────────────
-# Avoid Duplicate Tweets
-# ──────────────────────────────────────────────────────────────────────────
-
 def store_posted_tweet(tweet_text):
     try:
         emb = generate_embedding(tweet_text)
@@ -904,10 +696,6 @@ def is_too_similar_to_recent_tweets(new_text, similarity_threshold=0.88, lookbac
         logger.error(f"Error checking tweet similarity: {e}", exc_info=True)
         return False
 
-# ──────────────────────────────────────────────────────────────────────────
-# User Memory
-# ──────────────────────────────────────────────────────────────────────────
-
 def store_user_memory(user_id, conversation):
     try:
         emb = generate_embedding(conversation)
@@ -929,33 +717,16 @@ def get_user_memory(user_id, limit=5):
         logger.error(f"Error retrieving memory for {user_id}: {e}", exc_info=True)
         return []
 
-# ──────────────────────────────────────────────────────────────────────────
-# Post-generation Moderation
-# ──────────────────────────────────────────────────────────────────────────
-
 def moderate_bot_output(bot_text):
-    """
-    Re-run the moderation on the final GPT output.
-    If flagged, return a polite fallback.
-    """
     if not moderate_content(bot_text):
         logger.warning("Bot output was flagged; returning fallback.")
         return "I’m sorry, let me rephrase that to keep things friendly. 🤖"
     return bot_text
 
-# ──────────────────────────────────────────────────────────────────────────
-# Create Scene Content
-# ──────────────────────────────────────────────────────────────────────────
-
 def create_scene_content(theme, action=None):
-    """
-    Creates a short textual scene describing Chatty in the context of the given theme.
-    Combines GPT's suggested action (if valid) AND random design from randomize_chatty_appearance().
-    """
     base_scene = (
         f"Chatty, a retro CRT monitor with a bright-blue screen face, "
-        f"is in a futuristic environment about {theme}. "
-        "No text or letters anywhere."
+        f"is in a futuristic environment about {theme}. No text or letters anywhere."
     )
     random_appearance = randomize_chatty_appearance()
     if action and "futuristic task" not in action.lower():
@@ -964,27 +735,14 @@ def create_scene_content(theme, action=None):
         base_scene += f" Chatty is {random_appearance}."
     return base_scene
 
-# ──────────────────────────────────────────────────────────────────────────
-# Expand Post with Examples (2nd GPT pass)
-# ──────────────────────────────────────────────────────────────────────────
-
 def expand_post_with_examples(original_text):
-    """
-    Uses GPT to expand the short post with specific examples or details, 
-    but strictly ensures the ENTIRE expanded post is under ~230 chars.
-    """
-
     system_prompt = (
-        "You are a writing assistant. The user has a short social media post about AI and/or memecoins. "
-        "They want it expanded with more specifics or real-world examples, but the entire response must "
-        "stay UNDER 230 characters total, including punctuation. "
-        "Maintain a cheerful style, and end with a question if it fits. "
-        "Focus on AI or memecoin references, keep it user-friendly, and do NOT exceed 230 characters."
+        "You are a writing assistant. The user has a short social media post about AI or memecoins. "
+        "They want it expanded with more specifics, but keep it UNDER 230 characters total."
     )
-
     user_prompt = (
         f"Original Post:\n'{original_text}'\n\n"
-        "Please expand this post with one or two more specifics or examples, but strictly under 230 chars."
+        "Expand with one or two specifics or examples, strictly under 230 chars."
     )
 
     try:
@@ -1006,22 +764,16 @@ def expand_post_with_examples(original_text):
             return original_text
 
         expanded_text = completion.choices[0].message.content.strip()
-
-        # In case GPT still overshoots, do a final manual cutoff
         if len(expanded_text) > 230:
             expanded_text = expanded_text[:227].rstrip() + "..."
         return expanded_text
 
     except openai.error.OpenAIError as e:
         logger.error(f"Error expanding post with examples: {e}", exc_info=True)
-        return original_text  # fallback
+        return original_text
     except Exception as e:
         logger.error(f"Unexpected error in expand_post_with_examples: {e}", exc_info=True)
         return original_text
-
-# ──────────────────────────────────────────────────────────────────────────
-# post_to_twitter (with image, 2nd GPT pass)
-# ──────────────────────────────────────────────────────────────────────────
 
 def post_to_twitter(client, post_count, force_image=False):
     try:
@@ -1031,13 +783,16 @@ def post_to_twitter(client, post_count, force_image=False):
         text_content = generate_themed_post(theme)
         expanded_text = expand_post_with_examples(text_content)
 
-        # If too similar, fallback
         if is_too_similar_to_recent_tweets(expanded_text, similarity_threshold=0.95, lookback=10):
             logger.warning("Expanded post is too similar to a recent tweet. Using fallback instead.")
             expanded_text = "Exciting times in AI! Stay tuned, #AICommunity 🤖🚀"
 
+        # Build final tweet text
         tweet_text = construct_tweet(expanded_text)
+        # Single final truncation
+        tweet_text = safe_truncate(tweet_text, 280)
 
+        # Decide on image logic
         logger.info("Including image in this post (every post).")
         inferred_action = auto_infer_action_from_text(expanded_text)
         scene_content = create_scene_content(theme, action=inferred_action)
@@ -1066,7 +821,6 @@ def post_to_twitter(client, post_count, force_image=False):
                 client.create_tweet(text=tweet_text, media_ids=[media_id])
                 logger.info("Tweet with image posted successfully!")
 
-                # Clean up local file
                 try:
                     os.remove(image_path)
                     logger.info(f"Deleted local image file: {image_path}")
@@ -1096,18 +850,7 @@ def post_to_twitter(client, post_count, force_image=False):
         logger.error(f"Unexpected error in post_to_twitter: {e}", exc_info=True)
         return post_count
 
-# ──────────────────────────────────────────────────────────────────────────
-# handle_comment_with_context with parent/child logic
-# ──────────────────────────────────────────────────────────────────────────
-
 def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None):
-    """
-    1) Rate-limit
-    2) Summaries for long threads
-    3) Post-generation moderation
-    4) Storing new tweets with parent_id
-    """
-    # Rate Limit
     if not check_rate_limit(user_id):
         return "Please wait a bit before sending more requests. 🤖"
 
@@ -1123,7 +866,6 @@ def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None)
     if faq:
         return faq
 
-    # Build conversation path if parent_id is known
     full_convo = ""
     if parent_id:
         full_convo = build_conversation_path(parent_id)
@@ -1150,7 +892,6 @@ def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None)
     bot_reply = moderate_bot_output(bot_reply)
     log_response(comment, bot_reply)
 
-    # Store the new tweet in DB if tweet_id known
     if tweet_id:
         posted_tweets_collection.update_one(
             {"tweet_id": tweet_id},
@@ -1176,10 +917,6 @@ def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None)
         logger.error(f"Error storing embedding: {e}", exc_info=True)
 
     return bot_reply
-
-# ──────────────────────────────────────────────────────────────────────────
-# respond_to_mentions
-# ──────────────────────────────────────────────────────────────────────────
 
 def respond_to_mentions(client, since_id):
     try:
@@ -1220,7 +957,6 @@ def respond_to_mentions(client, since_id):
 
             logger.info(f"Processing mention {mention_id} from author {author_id} (@{username})")
 
-            # Check if we already responded
             if mentions_collection.find_one({'tweet_id': mention_id}):
                 logger.info(f"Already responded to mention {mention_id}. Skipping.")
                 continue
@@ -1233,7 +969,6 @@ def respond_to_mentions(client, since_id):
                 logger.info(f"Skipped mention due to prohibited content: {mention.text}")
                 continue
 
-            # Grab parent if any
             parent_id = None
             if mention.referenced_tweets:
                 parent_id = mention.referenced_tweets[0].id
@@ -1245,9 +980,11 @@ def respond_to_mentions(client, since_id):
                 parent_id=parent_id
             )
             if reply_text:
+                # Build the final reply text
                 full_reply = f"@{username} {reply_text}"
-                max_len = 280 - len(f"@{username} ")
-                final_reply = truncate_tweet(full_reply, max_length=max_len)
+                # Single safe truncation
+                final_reply = safe_truncate(full_reply, 280)
+
                 logger.debug(f"Reply Text: {final_reply}")
                 try:
                     client.create_tweet(text=final_reply, in_reply_to_tweet_id=mention_id)
@@ -1263,15 +1000,7 @@ def respond_to_mentions(client, since_id):
         logger.error(f"Unexpected error in respond_to_mentions: {e}", exc_info=True)
         return since_id
 
-# ──────────────────────────────────────────────────────────────────────────
-# Scheduling + since_id Persistence
-# ──────────────────────────────────────────────────────────────────────────
-
 def load_since_id(file_name):
-    """
-    Reads the 'since_id' from a file to know where we left off 
-    in fetching new mentions.
-    """
     if os.path.exists(file_name):
         with open(file_name, 'r') as f:
             try:
@@ -1283,10 +1012,6 @@ def load_since_id(file_name):
         return None
 
 def save_since_id(file_name, since_id):
-    """
-    Persists the 'since_id' to a file so we remember where we left off 
-    in fetching new mentions.
-    """
     try:
         with open(file_name, 'w', encoding='utf-8') as f:
             f.write(str(since_id))
@@ -1309,9 +1034,6 @@ def mention_checking_task(client, since_id):
     return since_id
 
 def schedule_posting(client, post_count):
-    """
-    Schedule the posting task to run every N hours.
-    """
     hours = random.choice([3, 4])
     schedule.every(hours).hours.do(posting_task, client=client, post_count=post_count)
     logger.info(f"Scheduled posting to run every {hours} hours.")
@@ -1321,17 +1043,13 @@ def schedule_mention_checking(client, since_id):
     logger.info("Scheduled mention checking every 1 hour.")
 
 def schedule_daily_persona(client):
-    """Example: post a persona each day at 10:00 AM."""
     schedule.every().day.at("10:00").do(post_daily_persona, client=client)
 
 def schedule_riddle_of_the_day(client):
-    """Example: post a riddle each day at 16:00 (4 PM)."""
     schedule.every().day.at("16:00").do(post_riddle_of_the_day, client=client)
 
 def schedule_daily_challenge(client):
-    """Example: post a challenge each day at 12:00 (12 PM)."""
     schedule.every().day.at("12:00").do(post_challenge_of_the_day, client=client)
 
 def schedule_storytime(client):
-    """Example: post a story snippet each day at 18:00 (6 PM)."""
     schedule.every().day.at("18:00").do(post_story_update, client=client)
