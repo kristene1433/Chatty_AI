@@ -202,9 +202,8 @@ def build_conversation_path(tweet_id):
 def generate_themed_post(theme):
     system_prompt = (
         "You are a social media copywriter who creates short, vivid, and enthusiastic posts. "
-        "Keep the tone optimistic and futuristic. Use relevant emojis and and stay under 200 characters total!"
-        "End with a question to encourage engagement. "
-        
+        "Keep the tone optimistic and futuristic. Use relevant emojis and stay under 200 characters total! "
+        "End with a question to encourage engagement."
     )
 
     user_prompt = (
@@ -246,19 +245,19 @@ def auto_infer_action_from_text(post_text):
     else:
         return "performing a futuristic task"
 
+MAX_PROMPT_LENGTH = 3000  # NEW: Define a max prompt length constant here.
+
 def generate_image(prompt):
     """
     Generates an image using the DALL·E 3 model (if you have access).
     """
     try:
-        # Again, use MAX_PROMPT_LENGTH here:
         if len(prompt) > MAX_PROMPT_LENGTH:
             logger.warning(
                 f"Truncating prompt from {len(prompt)} down to {MAX_PROMPT_LENGTH} chars."
             )
             prompt = prompt[:MAX_PROMPT_LENGTH]
 
-        # Now call DALL·E with the final prompt
         response = openai.Image.create(
             model="dall-e-3",
             prompt=prompt,
@@ -343,13 +342,6 @@ def randomize_chatty_appearance():
 
     return f"{chosen_pose}, {chosen_face}, {chosen_led}, {chosen_accessory}"
 
-##############################
-# Begin Updated Code Section #
-##############################
-
-# 1) Define a new constant near your imports or global definitions:
-MAX_PROMPT_LENGTH = 3000
-
 def create_simplified_image_prompt(text_content):
     """
     Creates a short DALL·E prompt focusing on Chatty’s retro-CRT style
@@ -379,7 +371,6 @@ def create_simplified_image_prompt(text_content):
         if response:
             prompt_result = response.choices[0].message.content.strip()
 
-            # Now using the new MAX_PROMPT_LENGTH:
             if len(prompt_result) > MAX_PROMPT_LENGTH:
                 logger.warning(
                     f"Truncating prompt from {len(prompt_result)} to {MAX_PROMPT_LENGTH} chars."
@@ -389,7 +380,6 @@ def create_simplified_image_prompt(text_content):
             logger.info(f"Simplified Chatty Prompt Created: {prompt_result}")
             return prompt_result
         else:
-            # Fallback if GPT returned no content
             return "Depict Chatty (retro CRT) with no text or letters in the environment."
 
     except openai.error.OpenAIError as e:
@@ -398,9 +388,6 @@ def create_simplified_image_prompt(text_content):
     except Exception as e:
         logger.error(f"Unexpected error creating simplified image prompt: {e}", exc_info=True)
         return f"Depict Chatty (retro CRT) in this setting, with no text or letters: {text_content}"
-
-
-
 
 def download_image(image_url, prompt):
     try:
@@ -446,9 +433,7 @@ def post_daily_persona(client):
         else:
             text_content = "I'm living a bright day as a persona—what's your next move? #chatty"
 
-        # Build entire tweet
         tweet_text = construct_tweet(text_content)
-        # Final single truncation
         safe_text = safe_truncate(tweet_text, 280)
         response = client.create_tweet(text=safe_text)
         logger.info(f"Daily Persona Tweet ID: {response.data['id']}")
@@ -503,24 +488,13 @@ def post_story_update(client):
     except Exception as e:
         logger.error(f"Error posting story update: {e}", exc_info=True)
 
-# -----------------------------------------------------------------------
-# NEW single-pass truncation approach
-# -----------------------------------------------------------------------
 def safe_truncate(text, max_len=280):
-    """
-    ONE simple pass to ensure text <= max_len.
-    If it exceeds, slice near max_len-3, then add '...'.
-    """
     if len(text) <= max_len:
         return text
     return text[: (max_len - 3)].rstrip() + "..."
 
 def construct_tweet(text_content):
-    """
-    Build the tweet text but do NOT slice or manually add ellipses here.
-    """
     text_content = text_content.strip().strip('"').strip("'")
-    # optionally remove existing hashtags
     no_hashtags = re.sub(r"#\w+", "", text_content).strip()
 
     extra_tags_pool = [
@@ -603,6 +577,30 @@ faq_responses = {
 
 def static_response(comment):
     return faq_responses.get(comment.lower(), None)
+
+# NEW: a helper function to catch "chatty" info requests
+def chatty_info_check(comment):
+    """
+    Checks if the user is asking for info about Chatty and returns a standard
+    response directing them to @chattyonsolana if so. Otherwise returns None.
+    """
+    triggers = [
+        "what is chatty",
+        "tell me about chatty",
+        "info about chatty",
+        "how does chatty work",
+        "where can i find chatty info",
+        "where can i find info about chatty"
+    ]
+    text_lower = comment.lower()
+
+    for phrase in triggers:
+        if phrase in text_lower:
+            return (
+                "For all the details on Chatty, head to our main page @chattyonsolana! "
+                "Everything you need is right there. ⭐️🤖"
+            )
+    return None
 
 def generate_safe_response(comment):
     system_prompt = (
@@ -787,12 +785,9 @@ def post_to_twitter(client, post_count, force_image=False):
             logger.warning("Expanded post is too similar to a recent tweet. Using fallback instead.")
             expanded_text = "Exciting times in AI! Stay tuned, #AICommunity 🤖🚀"
 
-        # Build final tweet text
         tweet_text = construct_tweet(expanded_text)
-        # Single final truncation
         tweet_text = safe_truncate(tweet_text, 280)
 
-        # Decide on image logic
         logger.info("Including image in this post (every post).")
         inferred_action = auto_infer_action_from_text(expanded_text)
         scene_content = create_scene_content(theme, action=inferred_action)
@@ -850,6 +845,7 @@ def post_to_twitter(client, post_count, force_image=False):
         logger.error(f"Unexpected error in post_to_twitter: {e}", exc_info=True)
         return post_count
 
+# NEW: Updated handle_comment_with_context with chatty_info_check
 def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None):
     if not check_rate_limit(user_id):
         return "Please wait a bit before sending more requests. 🤖"
@@ -866,6 +862,12 @@ def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None)
     if faq:
         return faq
 
+    # NEW: Check if user is specifically asking for Chatty info
+    chatty_info = chatty_info_check(comment)
+    if chatty_info:
+        return chatty_info
+
+    # If not matched by deflection, FAQ, or chatty_info_check, proceed with GPT
     full_convo = ""
     if parent_id:
         full_convo = build_conversation_path(parent_id)
@@ -980,9 +982,7 @@ def respond_to_mentions(client, since_id):
                 parent_id=parent_id
             )
             if reply_text:
-                # Build the final reply text
                 full_reply = f"@{username} {reply_text}"
-                # Single safe truncation
                 final_reply = safe_truncate(full_reply, 280)
 
                 logger.debug(f"Reply Text: {final_reply}")
