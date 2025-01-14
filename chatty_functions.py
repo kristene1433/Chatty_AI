@@ -26,6 +26,9 @@ EMBEDDING_CACHE = {}
 MODERATION_CACHE = {}
 USER_RATE_LIMITS = {}
 
+# NEW: We'll track recently used themes here (adjust maxlen as needed).
+RECENT_THEMES = deque(maxlen=10)
+
 def check_rate_limit(user_id, max_requests=5, window_sec=60):
     now = datetime.utcnow()
     if user_id not in USER_RATE_LIMITS:
@@ -494,12 +497,16 @@ def safe_truncate(text, max_len=280):
     return text[: (max_len - 3)].rstrip() + "..."
 
 def construct_tweet(text_content):
+    """
+    Builds the final tweet text by appending mention(s) or hashtags.
+    """
     text_content = text_content.strip().strip('"').strip("'")
+    # Remove existing hashtags if you want
     no_hashtags = re.sub(r"#\w+", "", text_content).strip()
 
     extra_tags_pool = [
         "#HeyChatty", "#AIforEveryone", "#MEMECOIN", "$CHATTY",
-        "#AImeme", "#AIagent"
+        "#AImeme", "#AIagent", "@ChatGPTapp"
     ]
     pick = random.choice(extra_tags_pool)
     tags = ["@chattyonsolana", pick]
@@ -578,7 +585,6 @@ faq_responses = {
 def static_response(comment):
     return faq_responses.get(comment.lower(), None)
 
-# NEW: a helper function to catch "chatty" info requests
 def chatty_info_check(comment):
     """
     Checks if the user is asking for info about Chatty and returns a standard
@@ -773,9 +779,22 @@ def expand_post_with_examples(original_text):
         logger.error(f"Unexpected error in expand_post_with_examples: {e}", exc_info=True)
         return original_text
 
+# NEW: function to pick a theme not used recently.
+def get_new_theme(themes_list):
+    """Pick a theme excluding what's in RECENT_THEMES. If all are excluded, allow them again."""
+    available_themes = [t for t in themes_list if t not in RECENT_THEMES]
+    if not available_themes:
+        # If we've excluded everything, just allow them all again
+        available_themes = themes_list
+    
+    theme = random.choice(available_themes)
+    RECENT_THEMES.append(theme)
+    return theme
+
 def post_to_twitter(client, post_count, force_image=False):
     try:
-        theme = random.choice(themes_list)
+        # Instead of random.choice, call our new function:
+        theme = get_new_theme(themes_list)
         logger.info(f"Randomly chosen theme: {theme}")
 
         text_content = generate_themed_post(theme)
@@ -845,8 +864,11 @@ def post_to_twitter(client, post_count, force_image=False):
         logger.error(f"Unexpected error in post_to_twitter: {e}", exc_info=True)
         return post_count
 
-# NEW: Updated handle_comment_with_context with chatty_info_check
 def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None):
+    """
+    Generates a GPT-based reply to a user mention or comment,
+    respecting the rate limit and moderation checks.
+    """
     if not check_rate_limit(user_id):
         return "Please wait a bit before sending more requests. 🤖"
 
@@ -862,12 +884,10 @@ def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None)
     if faq:
         return faq
 
-    # NEW: Check if user is specifically asking for Chatty info
     chatty_info = chatty_info_check(comment)
     if chatty_info:
         return chatty_info
 
-    # If not matched by deflection, FAQ, or chatty_info_check, proceed with GPT
     full_convo = ""
     if parent_id:
         full_convo = build_conversation_path(parent_id)
@@ -920,7 +940,11 @@ def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None)
 
     return bot_reply
 
+
 def respond_to_mentions(client, since_id):
+    """
+    Fetch mentions and reply to them with handle_comment_with_context.
+    """
     try:
         me = client.get_me()
         bot_user_id = me.data.id
@@ -959,14 +983,17 @@ def respond_to_mentions(client, since_id):
 
             logger.info(f"Processing mention {mention_id} from author {author_id} (@{username})")
 
+            # Skip if we've already replied to this mention
             if mentions_collection.find_one({'tweet_id': mention_id}):
                 logger.info(f"Already responded to mention {mention_id}. Skipping.")
                 continue
 
+            # Skip if mention is from self (the bot)
             if author_id == bot_user_id:
                 logger.info(f"Skipping mention {mention_id} from self.")
                 continue
 
+            # Block or skip unsafe/spammy mentions
             if not is_safe_to_respond(mention.text):
                 logger.info(f"Skipped mention due to prohibited content: {mention.text}")
                 continue
@@ -975,17 +1002,21 @@ def respond_to_mentions(client, since_id):
             if mention.referenced_tweets:
                 parent_id = mention.referenced_tweets[0].id
 
+            # Generate a reply using GPT or fallback logic
             reply_text = handle_comment_with_context(
                 user_id=author_id,
                 comment=mention.text,
                 tweet_id=mention_id,
                 parent_id=parent_id
             )
-            if reply_text:
-                full_reply = f"@{username} {reply_text}"
-                final_reply = safe_truncate(full_reply, 280)
 
-                logger.debug(f"Reply Text: {final_reply}")
+            if reply_text:
+                # Include the author's username in the reply
+                full_reply = f"@{username} {reply_text}"
+                # Truncate to 240 chars so there's less risk of cutting off
+                final_reply = safe_truncate(full_reply, max_len=240)
+
+                logger.debug(f"Reply Text (final): {final_reply}")
                 try:
                     client.create_tweet(text=final_reply, in_reply_to_tweet_id=mention_id)
                     logger.info(f"Replied to mention {mention_id}")
