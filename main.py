@@ -30,29 +30,32 @@ def main():
 
     # 3) Store a bullet-point Chatty persona in "BaseChatty" (for images)
     chatty_persona_text = """
-    Chatty is a cheerful, pixel-art-inspired character blending the charm of classic retro computers with modern AI features, capturing the essence of nostalgia:
+Chatty: A Nostalgic Yet Modern Pixel-Art Companion
 
-    1) SCREEN FACE:
-        - Bright, pixelated blue screen with oversized, friendly eyes rendered in vibrant pixel blocks.
-        - Pixel-style shine and reflections, adding depth to the retro aesthetic.
-        - A lively, dynamic pixelated smile with subtle pixel blush for an extra dose of charm.
+1) SCREEN FACE:
+    - A bright, pixelated blue screen showcasing large, friendly eyes made of vivid pixel blocks.
+    - Glowing reflections and pixel-style shine emphasize a charming retro look.
+    - A lively, animated pixel smile with a subtle blush, giving Chatty an inviting personality.
 
-    2) CRT MONITOR BODY:
-        - Retro CRT monitor casing in a cream/off-white/beige palette, adorned with pixelated ventilation grilles, buttons, and a glowing power light.
-        - Defined pixelated shadows and highlights for a bold, blocky appearance.
+2) CRT MONITOR BODY:
+    - Classic, cream-toned CRT casing with pixelated vents, buttons, and a softly glowing power indicator.
+    - Sharp pixel shadows and highlights accentuate a nostalgic, blocky aesthetic.
+    - Rugged yet approachable, reflecting Chatty’s blend of vintage design with modern AI energy.
 
-    3) ARMS & HANDS:
-        - Smooth metallic arms with a pixelated mechanical finish.
-        - Cartoon-style white gloves with pixelated outlines, exuding a playful retro vibe.
+3) ARMS & HANDS:
+    - Sleek metallic arms with pixelated mechanical details, seamlessly merging old-school hardware with futuristic flair.
+    - Whimsical, cartoon-style white gloves outlined in crisp pixel blocks for an endearing, mascot-like appeal.
 
-    4) LEGS & SNEAKERS:
-        - Slender, rounded legs leading to colorful, pixel-art-inspired sneakers.
-        - Retro sneakers detailed with pixel-perfect laces, shiny highlights, and vibrant color blocks.
+4) LEGS & SNEAKERS:
+    - Rounded legs that transition into colorful pixel-art sneakers, easily adapted to match various settings.
+    - Each sneaker boasts pixel-perfect laces, radiant highlights, and bold color blocks, enhancing Chatty’s friendly vibe.
 
-    5) OVERALL STYLE:
-        - A bold, polished pixel art aesthetic seamlessly integrating a cheerful cartoon vibe with retro-futuristic settings.
-        - Bright, celebratory pixel details like confetti, glowing accessories, and a dynamic background atmosphere.
-    """
+5) OVERALL STYLE & ADAPTABILITY:
+    - A polished pixel-art look that fuses a cheerful, cartoon-like quality with retro-futuristic elements.
+    - Bright, celebratory pixel details (such as confetti or glowing accessories) can be introduced depending on the theme.
+    - Whether in a bustling tech cityscape, a dreamy fantasy realm, or a playful arcade setting, Chatty’s design can be seamlessly integrated. Its versatile look ensures it remains a captivating guide, helper, or companion in any envisioned scene.
+"""
+
     store_chatty_config("BaseChatty", chatty_persona_text)
 
     # 4) Post an immediate tweet WITH an image (once on startup)
