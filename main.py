@@ -30,26 +30,29 @@ def main():
 
     # 3) Store a bullet-point Chatty persona in "BaseChatty" (for images)
     chatty_persona_text = """
-Chatty is a delightful, retro-styled character blending classic computers with modern AI features:
+    Chatty is a cheerful, pixel-art-inspired character blending the charm of classic retro computers with modern AI features, capturing the essence of nostalgia:
 
-1) SCREEN FACE:
-   - Vibrant bright blue screen with large, friendly eyes.
-   - Subtle shine or reflections for a lifelike effect.
-   - Cheerful, dynamic smile; slight blush on cheeks.
+    1) SCREEN FACE:
+        - Bright, pixelated blue screen with oversized, friendly eyes rendered in vibrant pixel blocks.
+        - Pixel-style shine and reflections, adding depth to the retro aesthetic.
+        - A lively, dynamic pixelated smile with subtle pixel blush for an extra dose of charm.
 
-2) CRT MONITOR BODY:
-   - Retro CRT monitor casing (cream/off-white/beige) with ventilation grilles, buttons, power light.
-   - Soft shadows and reflections for a 3D, photorealistic look.
+    2) CRT MONITOR BODY:
+        - Retro CRT monitor casing in a cream/off-white/beige palette, adorned with pixelated ventilation grilles, buttons, and a glowing power light.
+        - Defined pixelated shadows and highlights for a bold, blocky appearance.
 
-3) ARMS & HANDS:
-   - Flexible, polished metallic arms, cartoon-style white gloves.
+    3) ARMS & HANDS:
+        - Smooth metallic arms with a pixelated mechanical finish.
+        - Cartoon-style white gloves with pixelated outlines, exuding a playful retro vibe.
 
-4) LEGS & SNEAKERS:
-   - Rounded, slender legs with colorful, retro-inspired sneakers (detailed shoelaces, reflections).
+    4) LEGS & SNEAKERS:
+        - Slender, rounded legs leading to colorful, pixel-art-inspired sneakers.
+        - Retro sneakers detailed with pixel-perfect laces, shiny highlights, and vibrant color blocks.
 
-5) OVERALL STYLE:
-   - Clean, polished cartoon vibe in photorealistic settings, with consistent lighting and shadows.
-"""
+    5) OVERALL STYLE:
+        - A bold, polished pixel art aesthetic seamlessly integrating a cheerful cartoon vibe with retro-futuristic settings.
+        - Bright, celebratory pixel details like confetti, glowing accessories, and a dynamic background atmosphere.
+    """
     store_chatty_config("BaseChatty", chatty_persona_text)
 
     # 4) Post an immediate tweet WITH an image (once on startup)
@@ -66,11 +69,10 @@ Chatty is a delightful, retro-styled character blending classic computers with m
     #    b) Riddle of the day at 16:00
     #    c) Daily challenge at 18:00
     #    d) Storytime at 20:00
-    # schedule_daily_persona(client)
-    # schedule_riddle_of_the_day(client)
+    schedule_daily_persona(client)
+    schedule_riddle_of_the_day(client)
     # schedule_daily_challenge(client)
     # schedule_storytime(client)
-
 
     # 7) Main loop: run scheduled tasks
     while True:
@@ -84,5 +86,6 @@ Chatty is a delightful, retro-styled character blending classic computers with m
 
 if __name__ == "__main__":
     main()
+
 
 

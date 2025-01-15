@@ -152,7 +152,8 @@ def load_prompts(prompt_folder=PROMPT_FOLDER):
 
 ALL_PROMPTS = HARDCODED_PROMPTS + load_prompts()
 
-def robust_chat_completion(messages, model="gpt-4", max_retries=2, **kwargs):
+# CHANGED TO gpt-4o (default model)
+def robust_chat_completion(messages, model="gpt-4o", max_retries=2, **kwargs):
     for attempt in range(max_retries):
         try:
             start_time = time.time()
@@ -185,7 +186,8 @@ def summarize_text(text):
         {"role": "system", "content": "You are a helpful assistant who summarizes text."},
         {"role": "user", "content": f"Please summarize the following conversation in 3 concise sentences:\n{text}"}
     ]
-    resp = robust_chat_completion(summary_prompt, model="gpt-3.5-turbo", max_tokens=100)
+    # CHANGED TO gpt-4o
+    resp = robust_chat_completion(summary_prompt, model="gpt-4o", max_tokens=100)
     if resp:
         return resp["choices"][0]["message"]["content"].strip()
     else:
@@ -218,7 +220,8 @@ def generate_themed_post(theme):
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt}
     ]
-    resp = robust_chat_completion(messages, max_tokens=220, temperature=0.8, presence_penalty=1.0, frequency_penalty=0.5)
+    # CHANGED TO gpt-4o
+    resp = robust_chat_completion(messages, model="gpt-4o", max_tokens=220, temperature=0.8, presence_penalty=1.0, frequency_penalty=0.5)
     if resp:
         raw_text = resp.choices[0].message.content.strip()
         return raw_text.strip('"').strip("'")
@@ -240,6 +243,7 @@ def auto_infer_action_from_text(post_text):
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt}
     ]
+    # no model specified => defaults to "gpt-4o" from robust_chat_completion
     resp = robust_chat_completion(messages, max_tokens=40, temperature=0.9, presence_penalty=1.0, frequency_penalty=0.5)
     if resp:
         action_text = resp.choices[0].message.content.strip()
@@ -253,6 +257,7 @@ MAX_PROMPT_LENGTH = 3000  # NEW: Define a max prompt length constant here.
 def generate_image(prompt):
     """
     Generates an image using the DALL·E 3 model (if you have access).
+    NOTE: This remains 'dall-e-3' per your request.
     """
     try:
         if len(prompt) > MAX_PROMPT_LENGTH:
@@ -261,6 +266,7 @@ def generate_image(prompt):
             )
             prompt = prompt[:MAX_PROMPT_LENGTH]
 
+        # We DO NOT change this model—left as 'dall-e-3'
         response = openai.Image.create(
             model="dall-e-3",
             prompt=prompt,
@@ -327,23 +333,14 @@ def randomize_chatty_appearance():
         "LEDs on arms pulsating teal",
         "LEDs on arms flickering bright red"
     ]
-    accessories = [
-        "holding a small AI robot companion",
-        "holding a paintbrush with neon paint",
-        "wearing retro headphones",
-        "with a floating mini drone beside it",
-        "holding a glowing futuristic tablet",
-        "carrying a neon toolbox",
-        "sporting a cosmic star-lamp on one hand",
-        "wearing VR goggles with a sleek futuristic design"
-    ]
+    
 
     chosen_pose = random.choice(poses)
     chosen_face = random.choice(facial_expressions)
     chosen_led = random.choice(led_colors)
-    chosen_accessory = random.choice(accessories)
+    
 
-    return f"{chosen_pose}, {chosen_face}, {chosen_led}, {chosen_accessory}"
+    return f"{chosen_pose}, {chosen_face}, {chosen_led}"
 
 def create_simplified_image_prompt(text_content):
     """
@@ -369,7 +366,8 @@ def create_simplified_image_prompt(text_content):
             {"role": "system", "content": system_instruction},
             {"role": "user", "content": user_request}
         ]
-        response = robust_chat_completion(messages, model="gpt-4", max_tokens=120, 
+        # no model specified => defaults to "gpt-4o"
+        response = robust_chat_completion(messages, max_tokens=120, 
                                           temperature=0.9, presence_penalty=0.7, frequency_penalty=0.5)
         if response:
             prompt_result = response.choices[0].message.content.strip()
@@ -429,8 +427,9 @@ def post_daily_persona(client):
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt}
     ]
+    # CHANGED TO gpt-4o
     try:
-        completion = robust_chat_completion(messages, model="gpt-4", max_tokens=200, temperature=0.8)
+        completion = robust_chat_completion(messages, model="gpt-4o", max_tokens=200, temperature=0.8)
         if completion:
             text_content = completion.choices[0].message.content.strip()
         else:
@@ -506,7 +505,7 @@ def construct_tweet(text_content):
 
     extra_tags_pool = [
         "#HeyChatty", "#AIforEveryone", "#MEMECOIN", "$CHATTY",
-        "#AImeme", "#AIagent", "@ChatGPTapp"
+        "#AImeme", "#AIagent", "@ChatGPTapp", "#agent", "#CommunityCoins"
     ]
     pick = random.choice(extra_tags_pool)
     tags = ["@chattyonsolana", pick]
@@ -619,7 +618,8 @@ def generate_safe_response(comment):
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt}
     ]
-    resp = robust_chat_completion(messages, model="gpt-4", max_tokens=100)
+    # CHANGED TO gpt-4o
+    resp = robust_chat_completion(messages, model="gpt-4o", max_tokens=100)
     if resp:
         return resp['choices'][0]['message']['content'].strip()
     else:
@@ -637,6 +637,7 @@ def generate_embedding(text):
     if text in EMBEDDING_CACHE:
         return EMBEDDING_CACHE[text]
     try:
+        # Embeddings remain "text-embedding-ada-002"
         resp = openai.Embedding.create(input=text, model="text-embedding-ada-002")
         embedding = resp['data'][0]['embedding']
         EMBEDDING_CACHE[text] = embedding
@@ -755,9 +756,10 @@ def expand_post_with_examples(original_text):
             {"role": "user", "content": user_prompt}
         ]
 
+        # CHANGED TO gpt-4o
         completion = robust_chat_completion(
             messages,
-            model="gpt-4",
+            model="gpt-4o",
             max_tokens=150,
             temperature=0.7,
             presence_penalty=1.0,
@@ -904,7 +906,8 @@ def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None)
             )
         }
     ]
-    resp = robust_chat_completion(messages, model="gpt-4", max_tokens=150,
+    # CHANGED TO gpt-4o
+    resp = robust_chat_completion(messages, model="gpt-4o", max_tokens=150,
                                   temperature=0.9, presence_penalty=0.7, frequency_penalty=0.5)
     if not resp:
         bot_reply = "I’m sorry, I'm having trouble processing right now."
@@ -939,7 +942,6 @@ def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None)
         logger.error(f"Error storing embedding: {e}", exc_info=True)
 
     return bot_reply
-
 
 def respond_to_mentions(client, since_id):
     """
@@ -1084,3 +1086,4 @@ def schedule_daily_challenge(client):
 
 def schedule_storytime(client):
     schedule.every().day.at("18:00").do(post_story_update, client=client)
+
