@@ -72,7 +72,7 @@ Chatty: A Nostalgic Yet Modern Pixel-Art Companion
     #    b) Riddle of the day at 16:00
     #    c) Daily challenge at 18:00
     #    d) Storytime at 20:00
-    schedule_daily_persona(client)
+    # schedule_daily_persona(client)
     schedule_riddle_of_the_day(client)
     # schedule_daily_challenge(client)
     # schedule_storytime(client)

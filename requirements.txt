@@ -8,3 +8,4 @@ nltk==3.8.1
 numpy==1.25.2
 schedule==1.2.0
 runwayml
+rapidfuzz

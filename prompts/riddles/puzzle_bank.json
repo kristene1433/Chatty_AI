@@ -5,9 +5,89 @@
         "answer": "A piano!"
       },
       {
-        "question": "I’m taken from a mine and locked up in a wooden case. Who am I?",
-        "answer": "Pencil lead."
-      }
+        "question": "I can write code, poems, or essays, yet I never went to school. Who am I?",
+        "answer": "An AI language model."
+      },
+      {
+        "question": "Some call me digital gold, but I’m not found in a vault. What am I?",
+        "answer": "Bitcoin."
+      },
+      {
+        "question": "I’ve turned internet memes into fortunes—dog memes, to be exact. Who am I?",
+        "answer": "Dogecoin."
+      },
+      {
+        "question": "I exist on a chain but have no physical links. What am I?",
+        "answer": "A blockchain-based token."
+      },
+      {
+        "question": "I can be minted, transferred, or burned, yet you can’t hold me in your hand. What am I?",
+        "answer": "A cryptocurrency coin or token."
+      },
+      {
+        "question": "I figure out your next chess move without ever touching a board. Who am I?",
+        "answer": "A chess AI (chess engine)."
+      },
+      {
+        "question": "I’m a piece of digital art on the blockchain—collect me if you can! What am I?",
+        "answer": "An NFT (non-fungible token)."
+      },
+      {
+        "question": "I store your private keys, but I’m not a safety deposit box. What am I?",
+        "answer": "A crypto wallet."
+      },
+      {
+        "question": "I can learn from data without being told exactly what to do. Who am I?",
+        "answer": "A machine learning model."
+      },
+      {
+        "question": "I run 24/7, letting users swap tokens instantly, yet I’m not a bank. What am I?",
+        "answer": "A decentralized exchange (DEX)."
+      },
+      [
+        {
+          "question": "I began as a secret in code, yet I can outlast governments and banks. I exist everywhere and nowhere, powered by belief as much as by math. What am I?",
+          "answer": "A decentralized cryptocurrency (like Bitcoin)."
+        },
+        {
+          "question": "I can paint your wildest dreams but have never touched a brush. I churn through data and wake up as art. What am I?",
+          "answer": "An AI image generator (e.g., DALL·E)."
+        },
+        {
+          "question": "They say I’m unstoppable truth, yet I’m only as incorruptible as my nodes. I add one block at a time, though I have no hands. What am I?",
+          "answer": "A blockchain."
+        },
+        {
+          "question": "I started as a joke, yet soared to the moon on a meme. My face is a familiar friend, but my value is a trickster’s game. What am I?",
+          "answer": "A dog-themed memecoin (like Dogecoin)."
+        },
+        {
+          "question": "I’m a phantom fortune, conjured by speculation. My supply can be vast or tiny, and I vanish with a single rumor. What am I?",
+          "answer": "A memecoin or highly speculative crypto token."
+        },
+        {
+          "question": "I see what you watch, read, and buy, then nudge your next click. I’m invisible but shape your digital world. What am I?",
+          "answer": "An AI-powered recommendation algorithm."
+        },
+        {
+          "question": "I forged entire essays from a handful of words, yet I never set foot in a classroom. I’m fed by billions of sentences. What am I?",
+          "answer": "A large language model (like GPT)."
+        },
+        {
+          "question": "I carry wealth in code, but no bank can seize me. My locks open with private keys, even though I have no doors. What am I?",
+          "answer": "A crypto wallet."
+        },
+        {
+          "question": "They say I’m the future of art ownership, but I’m made of pixels and contracts. I can sell for millions though I can’t be hung on a wall. What am I?",
+          "answer": "An NFT (non-fungible token)."
+        },
+        {
+          "question": "I glow with potential yet live on borrowed hype. My identity’s minted in mania, and my worth can vanish with a tweet. What am I?",
+          "answer": "A memecoin riding on social media frenzy."
+        }
+      ]
+      
+      
     ]
   }
   

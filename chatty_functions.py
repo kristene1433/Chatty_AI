@@ -22,11 +22,19 @@ from config_and_setup import (
     IMAGE_DIR, PROMPT_FOLDER
 )
 
+# --- NEW: fuzzy matching support
+try:
+    from rapidfuzz import fuzz
+    FUZZ_AVAILABLE = True
+except ImportError:
+    FUZZ_AVAILABLE = False
+    logger.warning("rapidfuzz not installed; exact matching will be used for riddle guesses.")
+
 EMBEDDING_CACHE = {}
 MODERATION_CACHE = {}
 USER_RATE_LIMITS = {}
 
-# NEW: We'll track recently used themes here (adjust maxlen as needed).
+# We'll track recently used themes here (adjust maxlen as needed).
 RECENT_THEMES = deque(maxlen=10)
 
 def check_rate_limit(user_id, max_requests=5, window_sec=60):
@@ -152,8 +160,10 @@ def load_prompts(prompt_folder=PROMPT_FOLDER):
 
 ALL_PROMPTS = HARDCODED_PROMPTS + load_prompts()
 
-# CHANGED TO gpt-4o (default model)
 def robust_chat_completion(messages, model="gpt-4o", max_retries=2, **kwargs):
+    """
+    Wrapper that retries the ChatCompletion call a few times if there's an error.
+    """
     for attempt in range(max_retries):
         try:
             start_time = time.time()
@@ -186,7 +196,6 @@ def summarize_text(text):
         {"role": "system", "content": "You are a helpful assistant who summarizes text."},
         {"role": "user", "content": f"Please summarize the following conversation in 3 concise sentences:\n{text}"}
     ]
-    # CHANGED TO gpt-4o
     resp = robust_chat_completion(summary_prompt, model="gpt-4o", max_tokens=100)
     if resp:
         return resp["choices"][0]["message"]["content"].strip()
@@ -194,6 +203,9 @@ def summarize_text(text):
         return text[:500] + "..."
 
 def build_conversation_path(tweet_id):
+    """
+    Walks up the chain of replied tweets, returning their text in chronological order.
+    """
     path_texts = []
     current_id = tweet_id
     while current_id:
@@ -205,12 +217,14 @@ def build_conversation_path(tweet_id):
     return "\n".join(path_texts)
 
 def generate_themed_post(theme):
+    """
+    Quick prompt to create a short, futuristic social media post on a given theme.
+    """
     system_prompt = (
         "You are a social media copywriter who creates short, vivid, and enthusiastic posts. "
         "Keep the tone optimistic and futuristic. Use relevant emojis and stay under 200 characters total! "
         "End with a question to encourage engagement."
     )
-
     user_prompt = (
         f"Theme: {theme}\n\n"
         "Please create a short futuristic post. End with a question. Under 200 chars."
@@ -220,7 +234,6 @@ def generate_themed_post(theme):
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt}
     ]
-    # CHANGED TO gpt-4o
     resp = robust_chat_completion(messages, model="gpt-4o", max_tokens=220, temperature=0.8, presence_penalty=1.0, frequency_penalty=0.5)
     if resp:
         raw_text = resp.choices[0].message.content.strip()
@@ -243,7 +256,6 @@ def auto_infer_action_from_text(post_text):
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt}
     ]
-    # no model specified => defaults to "gpt-4o" from robust_chat_completion
     resp = robust_chat_completion(messages, max_tokens=40, temperature=0.9, presence_penalty=1.0, frequency_penalty=0.5)
     if resp:
         action_text = resp.choices[0].message.content.strip()
@@ -252,12 +264,12 @@ def auto_infer_action_from_text(post_text):
     else:
         return "performing a futuristic task"
 
-MAX_PROMPT_LENGTH = 3000  # NEW: Define a max prompt length constant here.
+MAX_PROMPT_LENGTH = 3000
 
 def generate_image(prompt):
     """
     Generates an image using the DALL·E 3 model (if you have access).
-    NOTE: This remains 'dall-e-3' per your request.
+    NOTE: This remains 'dall-e-3' as per your original request.
     """
     try:
         if len(prompt) > MAX_PROMPT_LENGTH:
@@ -266,7 +278,6 @@ def generate_image(prompt):
             )
             prompt = prompt[:MAX_PROMPT_LENGTH]
 
-        # We DO NOT change this model—left as 'dall-e-3'
         response = openai.Image.create(
             model="dall-e-3",
             prompt=prompt,
@@ -333,12 +344,10 @@ def randomize_chatty_appearance():
         "LEDs on arms pulsating teal",
         "LEDs on arms flickering bright red"
     ]
-    
 
     chosen_pose = random.choice(poses)
     chosen_face = random.choice(facial_expressions)
     chosen_led = random.choice(led_colors)
-    
 
     return f"{chosen_pose}, {chosen_face}, {chosen_led}"
 
@@ -366,7 +375,6 @@ def create_simplified_image_prompt(text_content):
             {"role": "system", "content": system_instruction},
             {"role": "user", "content": user_request}
         ]
-        # no model specified => defaults to "gpt-4o"
         response = robust_chat_completion(messages, max_tokens=120, 
                                           temperature=0.9, presence_penalty=0.7, frequency_penalty=0.5)
         if response:
@@ -411,85 +419,6 @@ def download_image(image_url, prompt):
         logger.error(f"Unexpected error downloading image: {e}", exc_info=True)
         return None
 
-def post_daily_persona(client):
-    if not PERSONAS_LIST:
-        logger.warning("No personas loaded. Skipping persona post.")
-        return
-
-    persona = random.choice(PERSONAS_LIST)
-    user_prompt = (
-        f"You are {persona}. Write a short social media post describing a 'day in the life' "
-        "and end with a fun question. Keep under 280 chars."
-    )
-    system_prompt = "You are Chatty_AI, bright and playful..."
-
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt}
-    ]
-    # CHANGED TO gpt-4o
-    try:
-        completion = robust_chat_completion(messages, model="gpt-4o", max_tokens=200, temperature=0.8)
-        if completion:
-            text_content = completion.choices[0].message.content.strip()
-        else:
-            text_content = "I'm living a bright day as a persona—what's your next move? #chatty"
-
-        tweet_text = construct_tweet(text_content)
-        safe_text = safe_truncate(tweet_text, 280)
-        response = client.create_tweet(text=safe_text)
-        logger.info(f"Daily Persona Tweet ID: {response.data['id']}")
-    except Exception as e:
-        logger.error(f"Error posting daily persona: {e}", exc_info=True)
-
-def post_riddle_of_the_day(client):
-    if not RIDDLES_LIST:
-        logger.warning("No riddles loaded. Skipping riddle post.")
-        return
-
-    riddle = random.choice(RIDDLES_LIST)
-    question = riddle.get("question", "What's the puzzle?")
-    riddle_text = f"Puzzle Time: {question}\nReply with your guess! #chatty #PuzzleTime"
-    try:
-        tweet_text = construct_tweet(riddle_text)
-        safe_text = safe_truncate(tweet_text, 280)
-        response = client.create_tweet(text=safe_text)
-        logger.info(f"Riddle post Tweet ID: {response.data['id']}")
-    except Exception as e:
-        logger.error(f"Error posting riddle: {e}", exc_info=True)
-
-def post_challenge_of_the_day(client):
-    if not CHALL_LIST:
-        logger.warning("No challenges loaded. Skipping challenge post.")
-        return
-
-    challenge = random.choice(CHALL_LIST)
-    challenge_text = f"Challenge time: {challenge}\nShare your thoughts! #chatty #Challenge"
-    try:
-        tweet_text = construct_tweet(challenge_text)
-        safe_text = safe_truncate(tweet_text, 280)
-        response = client.create_tweet(text=safe_text)
-        logger.info(f"Challenge post Tweet ID: {response.data['id']}")
-    except Exception as e:
-        logger.error(f"Error posting challenge: {e}", exc_info=True)
-
-def post_story_update(client):
-    if not STORY_LIST:
-        logger.warning("No stories loaded. Skipping story post.")
-        return
-
-    story_snippet = random.choice(STORY_LIST)
-    text = story_snippet.get('text', 'Once upon a time, Chatty...')
-    story_text = f"Story Time: {text}\nWhat happens next? #chatty #Story"
-
-    try:
-        tweet_text = construct_tweet(story_text)
-        safe_text = safe_truncate(tweet_text, 280)
-        response = client.create_tweet(text=safe_text)
-        logger.info(f"Story post Tweet ID: {response.data['id']}")
-    except Exception as e:
-        logger.error(f"Error posting story update: {e}", exc_info=True)
-
 def safe_truncate(text, max_len=280):
     if len(text) <= max_len:
         return text
@@ -513,6 +442,9 @@ def construct_tweet(text_content):
     return f"{no_hashtags} {' '.join(tags)}"
 
 def cleanup_images(directory, max_files=100):
+    """
+    Keeps image folder from growing indefinitely by removing the oldest files.
+    """
     try:
         images = sorted(
             glob.glob(os.path.join(directory, "*.png")),
@@ -558,6 +490,9 @@ def is_safe_to_respond(comment):
     return True
 
 def moderate_content(text):
+    """
+    Calls the OpenAI Moderation endpoint to see if the text is flagged.
+    """
     if text in MODERATION_CACHE:
         return MODERATION_CACHE[text]
 
@@ -608,6 +543,9 @@ def chatty_info_check(comment):
     return None
 
 def generate_safe_response(comment):
+    """
+    Basic fallback generation if the user’s comment is off-topic or requires refusal.
+    """
     system_prompt = (
         "You are a helpful AI. You only discuss AI-related topics. "
         "If the question is about personal info or finances, politely decline."
@@ -618,7 +556,6 @@ def generate_safe_response(comment):
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt}
     ]
-    # CHANGED TO gpt-4o
     resp = robust_chat_completion(messages, model="gpt-4o", max_tokens=100)
     if resp:
         return resp['choices'][0]['message']['content'].strip()
@@ -634,10 +571,12 @@ def log_response(comment, response):
         logger.error(f"Error logging response: {e}", exc_info=True)
 
 def generate_embedding(text):
+    """
+    Returns a cached embedding or generates a new one via 'text-embedding-ada-002'.
+    """
     if text in EMBEDDING_CACHE:
         return EMBEDDING_CACHE[text]
     try:
-        # Embeddings remain "text-embedding-ada-002"
         resp = openai.Embedding.create(input=text, model="text-embedding-ada-002")
         embedding = resp['data'][0]['embedding']
         EMBEDDING_CACHE[text] = embedding
@@ -653,6 +592,9 @@ def cosine_similarity(vec1, vec2):
     return np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
 
 def search_similar_conversations(query, top_k=3):
+    """
+    Simple example of semantic search over stored embeddings in MongoDB.
+    """
     try:
         q_emb = generate_embedding(query)
         if not q_emb:
@@ -686,6 +628,9 @@ def store_posted_tweet(tweet_text):
         logger.error(f"Error storing posted tweet: {e}", exc_info=True)
 
 def is_too_similar_to_recent_tweets(new_text, similarity_threshold=0.88, lookback=10):
+    """
+    Checks whether the new_text is too similar to any of the last 'lookback' tweets.
+    """
     try:
         new_emb = generate_embedding(new_text)
         recent_tweets = list(
@@ -702,6 +647,9 @@ def is_too_similar_to_recent_tweets(new_text, similarity_threshold=0.88, lookbac
         return False
 
 def store_user_memory(user_id, conversation):
+    """
+    Stores user-specific conversation context in MongoDB with embeddings.
+    """
     try:
         emb = generate_embedding(conversation)
         memory_collection.insert_one({
@@ -723,6 +671,9 @@ def get_user_memory(user_id, limit=5):
         return []
 
 def moderate_bot_output(bot_text):
+    """
+    Quick final check on bot output using moderation.
+    """
     if not moderate_content(bot_text):
         logger.warning("Bot output was flagged; returning fallback.")
         return "I’m sorry, let me rephrase that to keep things friendly. 🤖"
@@ -755,8 +706,6 @@ def expand_post_with_examples(original_text):
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ]
-
-        # CHANGED TO gpt-4o
         completion = robust_chat_completion(
             messages,
             model="gpt-4o",
@@ -781,21 +730,141 @@ def expand_post_with_examples(original_text):
         logger.error(f"Unexpected error in expand_post_with_examples: {e}", exc_info=True)
         return original_text
 
-# NEW: function to pick a theme not used recently.
 def get_new_theme(themes_list):
-    """Pick a theme excluding what's in RECENT_THEMES. If all are excluded, allow them again."""
+    """
+    Pick a theme excluding what's in RECENT_THEMES. If all are excluded, allow them again.
+    """
     available_themes = [t for t in themes_list if t not in RECENT_THEMES]
     if not available_themes:
-        # If we've excluded everything, just allow them all again
         available_themes = themes_list
     
     theme = random.choice(available_themes)
     RECENT_THEMES.append(theme)
     return theme
 
-def post_to_twitter(client, post_count, force_image=False):
+# ------------------------------------------------------------------------
+# NEW: Fuzzy matching function for riddle guesses (fallback to exact match)
+# ------------------------------------------------------------------------
+def is_guess_correct(user_guess, correct_answer, threshold=80):
+    """
+    Returns True if user_guess is 'close enough' to correct_answer,
+    using fuzzy matching if available; otherwise exact match fallback.
+    """
+    user_guess_lower = user_guess.strip().lower()
+    correct_answer_lower = correct_answer.strip().lower()
+
+    if not FUZZ_AVAILABLE:
+        return user_guess_lower == correct_answer_lower
+
+    similarity = fuzz.partial_ratio(user_guess_lower, correct_answer_lower)
+    return similarity >= threshold
+
+
+# ------------------------------------------------------------------------
+# Riddle Posting + Storing Q&A in the database
+# ------------------------------------------------------------------------
+def post_riddle_of_the_day(client):
+    if not RIDDLES_LIST:
+        logger.warning("No riddles loaded. Skipping riddle post.")
+        return
+
+    # Pick a random riddle
+    riddle = random.choice(RIDDLES_LIST)
+    question = riddle.get("question", "What's the puzzle?")
+    answer = riddle.get("answer", None)
+
+    riddle_text = f"Puzzle Time: {question}\nReply with your guess! #chatty #PuzzleTime"
     try:
-        # Instead of random.choice, call our new function:
+        tweet_text = construct_tweet(riddle_text)
+        safe_text = safe_truncate(tweet_text, 280)
+        response = client.create_tweet(text=safe_text)
+        tweet_id = response.data['id']
+        logger.info(f"Riddle post Tweet ID: {tweet_id}")
+
+        # NEW: Store the riddle's answer in posted_tweets_collection
+        posted_tweets_collection.insert_one({
+            "tweet_id": tweet_id,
+            "text": riddle_text,
+            "riddle_answer": answer,   # so we can check guesses later
+            "timestamp": datetime.utcnow()
+        })
+
+    except Exception as e:
+        logger.error(f"Error posting riddle: {e}", exc_info=True)
+
+# ------------------------------------------------------------------------
+# The rest of the daily posting logic remains the same:
+# ------------------------------------------------------------------------
+def post_daily_persona(client):
+    if not PERSONAS_LIST:
+        logger.warning("No personas loaded. Skipping persona post.")
+        return
+
+    persona = random.choice(PERSONAS_LIST)
+    user_prompt = (
+        f"You are {persona}. Write a short social media post describing a 'day in the life' "
+        "and end with a fun question. Keep under 280 chars."
+    )
+    system_prompt = "You are Chatty_AI, bright and playful..."
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt}
+    ]
+    try:
+        completion = robust_chat_completion(messages, model="gpt-4o", max_tokens=200, temperature=0.8)
+        if completion:
+            text_content = completion.choices[0].message.content.strip()
+        else:
+            text_content = "I'm living a bright day as a persona—what's your next move? #chatty"
+
+        tweet_text = construct_tweet(text_content)
+        safe_text = safe_truncate(tweet_text, 280)
+        response = client.create_tweet(text=safe_text)
+        logger.info(f"Daily Persona Tweet ID: {response.data['id']}")
+    except Exception as e:
+        logger.error(f"Error posting daily persona: {e}", exc_info=True)
+
+def post_challenge_of_the_day(client):
+    if not CHALL_LIST:
+        logger.warning("No challenges loaded. Skipping challenge post.")
+        return
+
+    challenge = random.choice(CHALL_LIST)
+    challenge_text = f"Challenge time: {challenge}\nShare your thoughts! #chatty #Challenge"
+    try:
+        tweet_text = construct_tweet(challenge_text)
+        safe_text = safe_truncate(tweet_text, 280)
+        response = client.create_tweet(text=safe_text)
+        logger.info(f"Challenge post Tweet ID: {response.data['id']}")
+    except Exception as e:
+        logger.error(f"Error posting challenge: {e}", exc_info=True)
+
+def post_story_update(client):
+    if not STORY_LIST:
+        logger.warning("No stories loaded. Skipping story post.")
+        return
+
+    story_snippet = random.choice(STORY_LIST)
+    text = story_snippet.get('text', 'Once upon a time, Chatty...')
+    story_text = f"Story Time: {text}\nWhat happens next? #chatty #Story"
+
+    try:
+        tweet_text = construct_tweet(story_text)
+        safe_text = safe_truncate(tweet_text, 280)
+        response = client.create_tweet(text=safe_text)
+        logger.info(f"Story post Tweet ID: {response.data['id']}")
+    except Exception as e:
+        logger.error(f"Error posting story update: {e}", exc_info=True)
+
+# ------------------------------------------------------------------------
+# MAIN TWEET POSTING FLOW
+# ------------------------------------------------------------------------
+def post_to_twitter(client, post_count, force_image=False):
+    """
+    Posts a random themed tweet with optional image, updated to handle similarity checks, etc.
+    """
+    try:
         theme = get_new_theme(themes_list)
         logger.info(f"Randomly chosen theme: {theme}")
 
@@ -866,10 +935,16 @@ def post_to_twitter(client, post_count, force_image=False):
         logger.error(f"Unexpected error in post_to_twitter: {e}", exc_info=True)
         return post_count
 
+# ------------------------------------------------------------------------
+# COMMENT/MENTION HANDLING FLOW
+# ------------------------------------------------------------------------
 def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None):
     """
     Generates a GPT-based reply to a user mention or comment,
     respecting the rate limit and moderation checks.
+
+    Also checks if the mention is responding to a riddle tweet, and if so,
+    uses fuzzy matching to see if user’s guess is correct.
     """
     if not check_rate_limit(user_id):
         return "Please wait a bit before sending more requests. 🤖"
@@ -890,33 +965,51 @@ def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None)
     if chatty_info:
         return chatty_info
 
-    full_convo = ""
+    # ----------------------------------------------------
+    # NEW LOGIC: If this mention is replying to a riddle...
+    # ----------------------------------------------------
+    riddle_doc = None
     if parent_id:
-        full_convo = build_conversation_path(parent_id)
-    short_summary = summarize_text(full_convo)
+        riddle_doc = posted_tweets_collection.find_one({"tweet_id": parent_id})
 
-    system_msg = select_system_prompt()
-    messages = [
-        {"role": "system", "content": system_msg},
-        {
-            "role": "user",
-            "content": (
-                f"Conversation so far (summary):\n{short_summary}\n\n"
-                f"User says: {comment}"
-            )
-        }
-    ]
-    # CHANGED TO gpt-4o
-    resp = robust_chat_completion(messages, model="gpt-4o", max_tokens=150,
-                                  temperature=0.9, presence_penalty=0.7, frequency_penalty=0.5)
-    if not resp:
-        bot_reply = "I’m sorry, I'm having trouble processing right now."
+    if riddle_doc and "riddle_answer" in riddle_doc and riddle_doc["riddle_answer"]:
+        correct_answer = riddle_doc["riddle_answer"]
+        # If user’s guess is close enough, confirm success:
+        if is_guess_correct(comment, correct_answer, threshold=75):
+            bot_reply = "That's correct! ⭐️ Nice job solving the puzzle!"
+        else:
+            bot_reply = "Good guess, but not quite right! Try again? 🤔"
     else:
-        bot_reply = resp["choices"][0]["message"]["content"].strip()
+        # Normal GPT reply logic (not a riddle reply)
+        full_convo = ""
+        if parent_id:
+            full_convo = build_conversation_path(parent_id)
+        short_summary = summarize_text(full_convo)
 
-    bot_reply = moderate_bot_output(bot_reply)
+        system_msg = select_system_prompt()
+        messages = [
+            {"role": "system", "content": system_msg},
+            {
+                "role": "user",
+                "content": (
+                    f"Conversation so far (summary):\n{short_summary}\n\n"
+                    f"User says: {comment}"
+                )
+            }
+        ]
+        resp = robust_chat_completion(messages, model="gpt-4o", max_tokens=150,
+                                      temperature=0.9, presence_penalty=0.7, frequency_penalty=0.5)
+        if not resp:
+            bot_reply = "I’m sorry, I'm having trouble processing right now."
+        else:
+            bot_reply = resp["choices"][0]["message"]["content"].strip()
+
+        bot_reply = moderate_bot_output(bot_reply)
+
+    # Log the response
     log_response(comment, bot_reply)
 
+    # Store tweet text so we can build conversation paths
     if tweet_id:
         posted_tweets_collection.update_one(
             {"tweet_id": tweet_id},
@@ -927,8 +1020,10 @@ def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None)
             upsert=True
         )
 
+    # Remember this user conversation
     store_user_memory(user_id, bot_reply)
 
+    # Also store an embedding of the bot reply for future semantic search
     try:
         emb = generate_embedding(bot_reply)
         if emb:
@@ -1033,6 +1128,9 @@ def respond_to_mentions(client, since_id):
         logger.error(f"Unexpected error in respond_to_mentions: {e}", exc_info=True)
         return since_id
 
+# ------------------------------------------------------------------------
+# SCHEDULING TASKS
+# ------------------------------------------------------------------------
 def load_since_id(file_name):
     if os.path.exists(file_name):
         with open(file_name, 'r') as f:
@@ -1086,4 +1184,3 @@ def schedule_daily_challenge(client):
 
 def schedule_storytime(client):
     schedule.every().day.at("18:00").do(post_story_update, client=client)
-
