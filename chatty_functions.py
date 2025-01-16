@@ -375,7 +375,7 @@ def create_simplified_image_prompt(text_content):
             {"role": "system", "content": system_instruction},
             {"role": "user", "content": user_request}
         ]
-        response = robust_chat_completion(messages, max_tokens=120, 
+        response = robust_chat_completion(messages, max_tokens=120,
                                           temperature=0.9, presence_penalty=0.7, frequency_penalty=0.5)
         if response:
             prompt_result = response.choices[0].message.content.strip()
@@ -420,9 +420,58 @@ def download_image(image_url, prompt):
         return None
 
 def safe_truncate(text, max_len=280):
+    """Original truncation function—still used for scheduled posts if desired."""
     if len(text) <= max_len:
         return text
     return text[: (max_len - 3)].rstrip() + "..."
+
+# ---------------------------
+# NEW SENTENCE-BASED TRUNCATION
+# ---------------------------
+import re
+
+def safe_truncate_by_sentence_no_ellipsis(
+    text, 
+    max_len=260, 
+    conclusion="I'll stop here for now."
+):
+    """
+    Truncates `text` so it never exceeds `max_len` characters,
+    preserving entire sentences. If we omit anything, we try adding 
+    a short concluding phrase if it fits. No ellipses are used.
+
+    1. Split text into sentences by ., !, or ? (preserve punctuation).
+    2. Rebuild until adding another sentence would exceed max_len.
+    3. If any sentences are omitted, try appending 'conclusion' if it fits.
+    """
+    if len(text) <= max_len:
+        return text
+
+    # Split on sentence boundaries, keeping punctuation.
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+
+    truncated_sentences = []
+    current_length = 0
+    omitted_something = False
+
+    for idx, sentence in enumerate(sentences):
+        addition_length = len(sentence) + (1 if idx > 0 else 0)  # space for all but first
+        if current_length + addition_length <= max_len:
+            truncated_sentences.append(sentence)
+            current_length += addition_length
+        else:
+            omitted_something = True
+            break
+
+    truncated_text = " ".join(truncated_sentences).strip()
+
+    # If we omitted anything, see if there's room for a short conclusion.
+    if omitted_something:
+        extra = (" " if truncated_text else "") + conclusion
+        if len(truncated_text) + len(extra) <= max_len:
+            truncated_text += extra
+
+    return truncated_text
 
 def construct_tweet(text_content):
     """
@@ -480,7 +529,7 @@ def save_post_count(file_name, count):
 
 def is_safe_to_respond(comment):
     prohibited_keywords = [
-        "airdrop", "giveaway", "telegram", "DM", "click", "join",
+        "airdrop", "giveaway", "DM", "click", "join",
         "https://", "http://", "free tokens", "earn money", "crypto drop"
     ]
     for keyword in prohibited_keywords:
@@ -1040,7 +1089,8 @@ def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None)
 
 def respond_to_mentions(client, since_id):
     """
-    Fetch mentions and reply to them with handle_comment_with_context.
+    Fetch mentions and reply to them with handle_comment_with_context,
+    but now using sentence-based truncation to avoid mid-word/sentence cuts.
     """
     try:
         me = client.get_me()
@@ -1110,8 +1160,11 @@ def respond_to_mentions(client, since_id):
             if reply_text:
                 # Include the author's username in the reply
                 full_reply = f"@{username} {reply_text}"
-                # Truncate to 240 chars so there's less risk of cutting off
-                final_reply = safe_truncate(full_reply, max_len=240)
+
+                # NEW: Use sentence-based truncation, max_len=260 for safety
+                final_reply = safe_truncate_by_sentence_no_ellipsis(
+                    full_reply, max_len=260, conclusion="Keep shining! ✨"
+                )
 
                 logger.debug(f"Reply Text (final): {final_reply}")
                 try:
