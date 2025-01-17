@@ -264,12 +264,14 @@ def auto_infer_action_from_text(post_text):
     else:
         return "performing a futuristic task"
 
-MAX_PROMPT_LENGTH = 3000
+# -------------------------------------
+# ADJUSTED to allow longer prompts
+# -------------------------------------
+MAX_PROMPT_LENGTH = 8000  # Increased from 3000 to allow bigger prompts
 
 def generate_image(prompt):
     """
-    Generates an image using the DALL·E 3 model (if you have access).
-    NOTE: This remains 'dall-e-3' as per your original request.
+    Generates an image using the DALL·E 3 model.
     """
     try:
         if len(prompt) > MAX_PROMPT_LENGTH:
@@ -351,35 +353,47 @@ def randomize_chatty_appearance():
 
     return f"{chosen_pose}, {chosen_face}, {chosen_led}"
 
+# ------------------------------------------------
+# UPDATED to allow a large, detailed prompt
+# with emphasis on Chatty’s full body
+# ------------------------------------------------
 def create_simplified_image_prompt(text_content):
     """
-    Creates a short DALL·E prompt focusing on Chatty’s retro-CRT style
-    PLUS environment details from text_content. Emphasizes no text or letters.
+    Creates a longer DALL·E prompt focusing on Chatty’s retro-CRT style
+    PLUS environment details from text_content. Emphasizes full body (legs & sneakers).
     """
     try:
         chatty_instructions = get_chatty_config("BaseChatty")
 
+        # We removed the "1–2 sentences" constraint and "no text or letters"
         system_instruction = (
-            "You are a creative AI that outputs a short, direct prompt for DALL·E. "
-            "Describe Chatty’s retro CRT appearance and the environment, in 1–2 sentences. "
-            "Absolutely no text or letters in the scene."
+            "You are a creative AI that outputs a detailed prompt for DALL·E. "
+            "Describe Chatty’s entire body from head to toe, focusing on pixel-art style details, legs, and sneakers, "
+            "in a vibrant environment. Text or letters are allowed if relevant."
         )
 
         user_request = (
             f"Scene Concept: {text_content}\n\n"
             f"Chatty instructions: {chatty_instructions}\n\n"
-            "Be concise—no more than 2 sentences. Emphasize Chatty’s environment and mood. No text or letters!"
+            "Generate a thorough, extended prompt describing every detail, including Chatty’s full body. "
+            "Feel free to be as descriptive as you'd like!"
         )
 
         messages = [
             {"role": "system", "content": system_instruction},
             {"role": "user", "content": user_request}
         ]
-        response = robust_chat_completion(messages, max_tokens=120, 
-                                          temperature=0.9, presence_penalty=0.7, frequency_penalty=0.5)
+        response = robust_chat_completion(
+            messages,
+            max_tokens=500,  # allow a bigger response
+            temperature=0.9,
+            presence_penalty=0.7,
+            frequency_penalty=0.5
+        )
         if response:
             prompt_result = response.choices[0].message.content.strip()
 
+            # Still do a final check for token length
             if len(prompt_result) > MAX_PROMPT_LENGTH:
                 logger.warning(
                     f"Truncating prompt from {len(prompt_result)} to {MAX_PROMPT_LENGTH} chars."
@@ -389,14 +403,22 @@ def create_simplified_image_prompt(text_content):
             logger.info(f"Simplified Chatty Prompt Created: {prompt_result}")
             return prompt_result
         else:
-            return "Depict Chatty (retro CRT) with no text or letters in the environment."
+            return (
+                "Depict Chatty (retro CRT) with legs and sneakers in a vibrant environment. "
+                "Show entire body, focusing on pixel-art details."
+            )
 
     except openai.error.OpenAIError as e:
         logger.error(f"OpenAI Error creating simplified image prompt: {e}", exc_info=True)
-        return "Depict Chatty (retro CRT) with no text or letters in the environment."
+        return (
+            "Depict Chatty (retro CRT) with legs and sneakers in a vibrant environment. "
+            "Show entire body, focusing on pixel-art details."
+        )
     except Exception as e:
         logger.error(f"Unexpected error creating simplified image prompt: {e}", exc_info=True)
-        return f"Depict Chatty (retro CRT) in this setting, with no text or letters: {text_content}"
+        return (
+            f"Depict Chatty (retro CRT) in this setting, full-body with legs and sneakers: {text_content}"
+        )
 
 def download_image(image_url, prompt):
     try:
@@ -419,13 +441,9 @@ def download_image(image_url, prompt):
         logger.error(f"Unexpected error downloading image: {e}", exc_info=True)
         return None
 
-# ---------------------
-# UPDATED for 220 chars
-# ---------------------
 def safe_truncate(text, max_len=220):
     """
     Truncates text at max_len - 3, then appends '...'.
-    Lowered max_len from 280 to 220 to reduce the chance of awkward cutoff.
     """
     if len(text) <= max_len:
         return text
@@ -691,7 +709,7 @@ def moderate_bot_output(bot_text):
 def create_scene_content(theme, action=None):
     base_scene = (
         f"Chatty, a retro CRT monitor with a bright-blue screen face, "
-        f"is in a futuristic environment about {theme}. No text or letters anywhere."
+        f"is in a futuristic environment about {theme}. "
     )
     random_appearance = randomize_chatty_appearance()
     if action and "futuristic task" not in action.lower():
@@ -700,13 +718,9 @@ def create_scene_content(theme, action=None):
         base_scene += f" Chatty is {random_appearance}."
     return base_scene
 
-# --------------------------
-# UPDATED to use max_len=220
-# --------------------------
 def expand_post_with_examples(original_text, max_len=220):
     """
     Expands the post but keeps it strictly under `max_len` characters total.
-    Lowering from 250 to 220 to help prevent last-second truncation.
     """
     system_prompt = (
         "You are a writing assistant. The user has a short social media post about AI or memecoins. "
@@ -735,7 +749,6 @@ def expand_post_with_examples(original_text, max_len=220):
             return original_text
 
         expanded_text = completion.choices[0].message.content.strip()
-        # Final safety check
         return safe_truncate(expanded_text, max_len=max_len)
 
     except openai.error.OpenAIError as e:
@@ -757,9 +770,6 @@ def get_new_theme(themes_list):
     RECENT_THEMES.append(theme)
     return theme
 
-# ------------------------------------------------------------------------
-# NEW: Fuzzy matching function for riddle guesses (fallback to exact match)
-# ------------------------------------------------------------------------
 def is_guess_correct(user_guess, correct_answer, threshold=80):
     """
     Returns True if user_guess is 'close enough' to correct_answer,
@@ -774,41 +784,33 @@ def is_guess_correct(user_guess, correct_answer, threshold=80):
     similarity = fuzz.partial_ratio(user_guess_lower, correct_answer_lower)
     return similarity >= threshold
 
-# ------------------------------------------------------------------------
-# Riddle Posting + Storing Q&A in the database
-# ------------------------------------------------------------------------
 def post_riddle_of_the_day(client):
     if not RIDDLES_LIST:
         logger.warning("No riddles loaded. Skipping riddle post.")
         return
 
-    # Pick a random riddle
     riddle = random.choice(RIDDLES_LIST)
     question = riddle.get("question", "What's the puzzle?")
     answer = riddle.get("answer", None)
 
     riddle_text = f"Puzzle Time: {question}\nReply with your guess! #chatty #PuzzleTime"
     try:
-        tweet_text = construct_tweet(riddle_text, max_len=220)  # Updated
+        tweet_text = construct_tweet(riddle_text, max_len=220)
         safe_text = safe_truncate(tweet_text, 220)
         response = client.create_tweet(text=safe_text)
         tweet_id = response.data['id']
         logger.info(f"Riddle post Tweet ID: {tweet_id}")
 
-        # NEW: Store the riddle's answer in posted_tweets_collection
         posted_tweets_collection.insert_one({
             "tweet_id": tweet_id,
             "text": riddle_text,
-            "riddle_answer": answer,   # so we can check guesses later
+            "riddle_answer": answer,
             "timestamp": datetime.utcnow()
         })
 
     except Exception as e:
         logger.error(f"Error posting riddle: {e}", exc_info=True)
 
-# ------------------------------------------------------------------------
-# The rest of the daily posting logic remains the same:
-# ------------------------------------------------------------------------
 def post_daily_persona(client):
     if not PERSONAS_LIST:
         logger.warning("No personas loaded. Skipping persona post.")
@@ -832,7 +834,6 @@ def post_daily_persona(client):
         else:
             text_content = "I'm living a bright day as a persona—what's your next move? #chatty"
 
-        # Updated for 220
         tweet_text = construct_tweet(text_content, max_len=220)
         safe_text = safe_truncate(tweet_text, 220)
         response = client.create_tweet(text=safe_text)
@@ -848,7 +849,7 @@ def post_challenge_of_the_day(client):
     challenge = random.choice(CHALL_LIST)
     challenge_text = f"Challenge time: {challenge}\nShare your thoughts! #chatty #Challenge"
     try:
-        tweet_text = construct_tweet(challenge_text, max_len=220)  # Updated
+        tweet_text = construct_tweet(challenge_text, max_len=220)
         safe_text = safe_truncate(tweet_text, 220)
         response = client.create_tweet(text=safe_text)
         logger.info(f"Challenge post Tweet ID: {response.data['id']}")
@@ -865,16 +866,13 @@ def post_story_update(client):
     story_text = f"Story Time: {text}\nWhat happens next? #chatty #Story"
 
     try:
-        tweet_text = construct_tweet(story_text, max_len=220)  # Updated
+        tweet_text = construct_tweet(story_text, max_len=220)
         safe_text = safe_truncate(tweet_text, 220)
         response = client.create_tweet(text=safe_text)
         logger.info(f"Story post Tweet ID: {response.data['id']}")
     except Exception as e:
         logger.error(f"Error posting story update: {e}", exc_info=True)
 
-# ------------------------------------------------------------------------
-# MAIN TWEET POSTING FLOW
-# ------------------------------------------------------------------------
 def post_to_twitter(client, post_count, force_image=False):
     """
     Posts a random themed tweet with optional image, updated to handle similarity checks, etc.
@@ -890,11 +888,15 @@ def post_to_twitter(client, post_count, force_image=False):
             logger.warning("Expanded post is too similar to a recent tweet. Using fallback instead.")
             expanded_text = "Exciting times in AI! Stay tuned, #AICommunity 🤖🚀"
 
-        # Updated for 220
         tweet_text = construct_tweet(expanded_text, max_len=220)
         tweet_text = safe_truncate(tweet_text, 220)
 
-        logger.info("Including image in this post (every post).")
+        # Decide if we always want an image or random
+        if force_image:
+            logger.info("Including image in this post (startup or forced).")
+        else:
+            logger.info("Including image in this post (every post).")
+
         inferred_action = auto_infer_action_from_text(expanded_text)
         scene_content = create_scene_content(theme, action=inferred_action)
         img_prompt = create_simplified_image_prompt(scene_content)
@@ -951,9 +953,6 @@ def post_to_twitter(client, post_count, force_image=False):
         logger.error(f"Unexpected error in post_to_twitter: {e}", exc_info=True)
         return post_count
 
-# ------------------------------------------------------------------------
-# COMMENT/MENTION HANDLING FLOW
-# ------------------------------------------------------------------------
 def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None):
     """
     Generates a GPT-based reply to a user mention or comment,
@@ -981,22 +980,19 @@ def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None)
     if chatty_info:
         return chatty_info
 
-    # ----------------------------------------------------
     # NEW LOGIC: If this mention is replying to a riddle...
-    # ----------------------------------------------------
     riddle_doc = None
     if parent_id:
         riddle_doc = posted_tweets_collection.find_one({"tweet_id": parent_id})
 
     if riddle_doc and "riddle_answer" in riddle_doc and riddle_doc["riddle_answer"]:
         correct_answer = riddle_doc["riddle_answer"]
-        # If user’s guess is close enough, confirm success:
         if is_guess_correct(comment, correct_answer, threshold=75):
             bot_reply = "That's correct! ⭐️ Nice job solving the puzzle!"
         else:
             bot_reply = "Good guess, but not quite right! Try again? 🤔"
     else:
-        # Normal GPT reply logic (not a riddle reply)
+        # Normal GPT reply logic
         full_convo = ""
         if parent_id:
             full_convo = build_conversation_path(parent_id)
@@ -1022,10 +1018,8 @@ def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None)
 
         bot_reply = moderate_bot_output(bot_reply)
 
-    # Log the response
     log_response(comment, bot_reply)
 
-    # Store tweet text so we can build conversation paths
     if tweet_id:
         posted_tweets_collection.update_one(
             {"tweet_id": tweet_id},
@@ -1036,10 +1030,8 @@ def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None)
             upsert=True
         )
 
-    # Remember this user conversation
     store_user_memory(user_id, bot_reply)
 
-    # Also store an embedding of the bot reply for future semantic search
     try:
         emb = generate_embedding(bot_reply)
         if emb:
@@ -1106,7 +1098,6 @@ def respond_to_mentions(client, since_id):
                 logger.info(f"Skipping mention {mention_id} from self.")
                 continue
 
-            # Block or skip unsafe/spammy mentions
             if not is_safe_to_respond(mention.text):
                 logger.info(f"Skipped mention due to prohibited content: {mention.text}")
                 continue
@@ -1115,7 +1106,7 @@ def respond_to_mentions(client, since_id):
             if mention.referenced_tweets:
                 parent_id = mention.referenced_tweets[0].id
 
-            # Generate a reply using GPT or fallback logic
+            # Generate a reply
             reply_text = handle_comment_with_context(
                 user_id=author_id,
                 comment=mention.text,
@@ -1124,9 +1115,7 @@ def respond_to_mentions(client, since_id):
             )
 
             if reply_text:
-                # Include the author's username in the reply
                 full_reply = f"@{username} {reply_text}"
-                # Truncate to 220 or 240 to avoid cutting off mid-sentence.
                 final_reply = safe_truncate(full_reply, max_len=220)
 
                 logger.debug(f"Reply Text (final): {final_reply}")
@@ -1144,9 +1133,6 @@ def respond_to_mentions(client, since_id):
         logger.error(f"Unexpected error in respond_to_mentions: {e}", exc_info=True)
         return since_id
 
-# ------------------------------------------------------------------------
-# SCHEDULING TASKS
-# ------------------------------------------------------------------------
 def load_since_id(file_name):
     if os.path.exists(file_name):
         with open(file_name, 'r') as f:

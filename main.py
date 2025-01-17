@@ -58,7 +58,6 @@ Chatty: A Nostalgic Yet Modern Pixel-Art Companion
     - Whether in a bustling tech cityscape, a dreamy fantasy realm, or a playful arcade setting, Chatty’s design can be seamlessly integrated. Its versatile look ensures it remains a captivating guide, helper, or companion in any envisioned scene.
 """
     
-
     store_chatty_config("BaseChatty", chatty_persona_text)
 
     # 4) Post an immediate tweet WITH an image (once on startup)
@@ -92,6 +91,3 @@ Chatty: A Nostalgic Yet Modern Pixel-Art Companion
 
 if __name__ == "__main__":
     main()
-
-
-
