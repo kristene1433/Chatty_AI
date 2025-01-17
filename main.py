@@ -47,14 +47,17 @@ Chatty: A Nostalgic Yet Modern Pixel-Art Companion
     - Whimsical, cartoon-style white gloves outlined in crisp pixel blocks for an endearing, mascot-like appeal.
 
 4) LEGS & SNEAKERS:
-    - Rounded legs that transition into colorful pixel-art sneakers, easily adapted to match various settings.
-    - Each sneaker boasts pixel-perfect laces, radiant highlights, and bold color blocks, enhancing Chatty’s friendly vibe.
+    - Streamlined and adjustable legs that transition into elongated, rounded metallic extensions, giving a taller, more proportional silhouette.
+    - The metallic legs feature subtle pixel-art grooves and details, blending seamlessly with Chatty's retro-modern aesthetic.
+    - Each leg ends in Chatty's iconic colorful pixel-art sneakers, which boast pixel-perfect laces, radiant highlights, and bold color blocks that enhance Chatty’s friendly vibe.
+    - The legs can dynamically adjust in length, allowing Chatty to adapt to various settings, from towering confidently to squatting playfully.
 
 5) OVERALL STYLE & ADAPTABILITY:
     - A polished pixel-art look that fuses a cheerful, cartoon-like quality with retro-futuristic elements.
     - Bright, celebratory pixel details (such as confetti or glowing accessories) can be introduced depending on the theme.
     - Whether in a bustling tech cityscape, a dreamy fantasy realm, or a playful arcade setting, Chatty’s design can be seamlessly integrated. Its versatile look ensures it remains a captivating guide, helper, or companion in any envisioned scene.
 """
+    
 
     store_chatty_config("BaseChatty", chatty_persona_text)
 
@@ -73,7 +76,7 @@ Chatty: A Nostalgic Yet Modern Pixel-Art Companion
     #    c) Daily challenge at 18:00
     #    d) Storytime at 20:00
     # schedule_daily_persona(client)
-    # schedule_riddle_of_the_day(client)
+    schedule_riddle_of_the_day(client)
     # schedule_daily_challenge(client)
     # schedule_storytime(client)
 

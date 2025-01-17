@@ -419,14 +419,22 @@ def download_image(image_url, prompt):
         logger.error(f"Unexpected error downloading image: {e}", exc_info=True)
         return None
 
-def safe_truncate(text, max_len=280):
+# ---------------------
+# UPDATED for 220 chars
+# ---------------------
+def safe_truncate(text, max_len=220):
+    """
+    Truncates text at max_len - 3, then appends '...'.
+    Lowered max_len from 280 to 220 to reduce the chance of awkward cutoff.
+    """
     if len(text) <= max_len:
         return text
     return text[: (max_len - 3)].rstrip() + "..."
 
-def construct_tweet(text_content):
+def construct_tweet(text_content, max_len=220):
     """
     Builds the final tweet text by appending mention(s) or hashtags.
+    Then ensures it fits within `max_len` chars via safe_truncate.
     """
     text_content = text_content.strip().strip('"').strip("'")
     # Remove existing hashtags if you want
@@ -439,7 +447,8 @@ def construct_tweet(text_content):
     pick = random.choice(extra_tags_pool)
     tags = ["@chattyonsolana", pick]
 
-    return f"{no_hashtags} {' '.join(tags)}"
+    combined_text = f"{no_hashtags} {' '.join(tags)}"
+    return safe_truncate(combined_text, max_len=max_len)
 
 def cleanup_images(directory, max_files=100):
     """
@@ -691,14 +700,21 @@ def create_scene_content(theme, action=None):
         base_scene += f" Chatty is {random_appearance}."
     return base_scene
 
-def expand_post_with_examples(original_text):
+# --------------------------
+# UPDATED to use max_len=220
+# --------------------------
+def expand_post_with_examples(original_text, max_len=220):
+    """
+    Expands the post but keeps it strictly under `max_len` characters total.
+    Lowering from 250 to 220 to help prevent last-second truncation.
+    """
     system_prompt = (
         "You are a writing assistant. The user has a short social media post about AI or memecoins. "
-        "They want it expanded with more specifics, but keep it UNDER 230 characters total."
+        f"They want it expanded with more specifics, but keep it UNDER {max_len} characters total."
     )
     user_prompt = (
         f"Original Post:\n'{original_text}'\n\n"
-        "Expand with one or two specifics or examples, strictly under 230 chars."
+        f"Expand with one or two specifics or examples, strictly under {max_len} chars."
     )
 
     try:
@@ -719,9 +735,8 @@ def expand_post_with_examples(original_text):
             return original_text
 
         expanded_text = completion.choices[0].message.content.strip()
-        if len(expanded_text) > 230:
-            expanded_text = expanded_text[:227].rstrip() + "..."
-        return expanded_text
+        # Final safety check
+        return safe_truncate(expanded_text, max_len=max_len)
 
     except openai.error.OpenAIError as e:
         logger.error(f"Error expanding post with examples: {e}", exc_info=True)
@@ -759,7 +774,6 @@ def is_guess_correct(user_guess, correct_answer, threshold=80):
     similarity = fuzz.partial_ratio(user_guess_lower, correct_answer_lower)
     return similarity >= threshold
 
-
 # ------------------------------------------------------------------------
 # Riddle Posting + Storing Q&A in the database
 # ------------------------------------------------------------------------
@@ -775,8 +789,8 @@ def post_riddle_of_the_day(client):
 
     riddle_text = f"Puzzle Time: {question}\nReply with your guess! #chatty #PuzzleTime"
     try:
-        tweet_text = construct_tweet(riddle_text)
-        safe_text = safe_truncate(tweet_text, 280)
+        tweet_text = construct_tweet(riddle_text, max_len=220)  # Updated
+        safe_text = safe_truncate(tweet_text, 220)
         response = client.create_tweet(text=safe_text)
         tweet_id = response.data['id']
         logger.info(f"Riddle post Tweet ID: {tweet_id}")
@@ -818,8 +832,9 @@ def post_daily_persona(client):
         else:
             text_content = "I'm living a bright day as a persona—what's your next move? #chatty"
 
-        tweet_text = construct_tweet(text_content)
-        safe_text = safe_truncate(tweet_text, 280)
+        # Updated for 220
+        tweet_text = construct_tweet(text_content, max_len=220)
+        safe_text = safe_truncate(tweet_text, 220)
         response = client.create_tweet(text=safe_text)
         logger.info(f"Daily Persona Tweet ID: {response.data['id']}")
     except Exception as e:
@@ -833,8 +848,8 @@ def post_challenge_of_the_day(client):
     challenge = random.choice(CHALL_LIST)
     challenge_text = f"Challenge time: {challenge}\nShare your thoughts! #chatty #Challenge"
     try:
-        tweet_text = construct_tweet(challenge_text)
-        safe_text = safe_truncate(tweet_text, 280)
+        tweet_text = construct_tweet(challenge_text, max_len=220)  # Updated
+        safe_text = safe_truncate(tweet_text, 220)
         response = client.create_tweet(text=safe_text)
         logger.info(f"Challenge post Tweet ID: {response.data['id']}")
     except Exception as e:
@@ -850,8 +865,8 @@ def post_story_update(client):
     story_text = f"Story Time: {text}\nWhat happens next? #chatty #Story"
 
     try:
-        tweet_text = construct_tweet(story_text)
-        safe_text = safe_truncate(tweet_text, 280)
+        tweet_text = construct_tweet(story_text, max_len=220)  # Updated
+        safe_text = safe_truncate(tweet_text, 220)
         response = client.create_tweet(text=safe_text)
         logger.info(f"Story post Tweet ID: {response.data['id']}")
     except Exception as e:
@@ -869,14 +884,15 @@ def post_to_twitter(client, post_count, force_image=False):
         logger.info(f"Randomly chosen theme: {theme}")
 
         text_content = generate_themed_post(theme)
-        expanded_text = expand_post_with_examples(text_content)
+        expanded_text = expand_post_with_examples(text_content, max_len=220)
 
         if is_too_similar_to_recent_tweets(expanded_text, similarity_threshold=0.95, lookback=10):
             logger.warning("Expanded post is too similar to a recent tweet. Using fallback instead.")
             expanded_text = "Exciting times in AI! Stay tuned, #AICommunity 🤖🚀"
 
-        tweet_text = construct_tweet(expanded_text)
-        tweet_text = safe_truncate(tweet_text, 280)
+        # Updated for 220
+        tweet_text = construct_tweet(expanded_text, max_len=220)
+        tweet_text = safe_truncate(tweet_text, 220)
 
         logger.info("Including image in this post (every post).")
         inferred_action = auto_infer_action_from_text(expanded_text)
@@ -1110,8 +1126,8 @@ def respond_to_mentions(client, since_id):
             if reply_text:
                 # Include the author's username in the reply
                 full_reply = f"@{username} {reply_text}"
-                # Truncate to 240 chars so there's less risk of cutting off
-                final_reply = safe_truncate(full_reply, max_len=240)
+                # Truncate to 220 or 240 to avoid cutting off mid-sentence.
+                final_reply = safe_truncate(full_reply, max_len=220)
 
                 logger.debug(f"Reply Text (final): {final_reply}")
                 try:
@@ -1184,6 +1200,7 @@ def schedule_daily_challenge(client):
 
 def schedule_storytime(client):
     schedule.every().day.at("18:00").do(post_story_update, client=client)
+
 
 
 
