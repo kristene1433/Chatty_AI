@@ -11,13 +11,10 @@ from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont  # For meme text overlay
 
 from telegram import Update
-
-# NEW (v20+)
 from telegram.ext import (
-    Updater, CommandHandler, MessageHandler, filters, CallbackContext,
-    ChatMemberHandler
+    ApplicationBuilder, CommandHandler, MessageHandler, filters,
+    ChatMemberHandler, CallbackContext
 )
-
 
 from config_and_setup import (
     logger, TELEGRAM_BOT_TOKEN, memory_collection
@@ -148,7 +145,7 @@ def advanced_spam_filter(update: Update, context: CallbackContext):
 
 def is_suspicious_text_gpt_3_5(user_text: str) -> bool:
     """
-    Calls GPT-3.5 with a prompt like "Is this message spam?" 
+    Calls GPT-3.5 with a prompt like "Is this message spam?"
     Return True if GPT indicates spam, False otherwise.
     """
     try:
@@ -171,11 +168,10 @@ def is_suspicious_text_gpt_3_5(user_text: str) -> bool:
         return False
 
 ###############################################################################
-# LEGACY USER-SPECIFIC MEMORY + SENTIMENT-AWARE REPLY
+# LEGACY USER-SPECIFIC MEMORY + SENTIMENT-AWARE REPLY (Optional)
 ###############################################################################
 def handle_user_message(update: Update, context: CallbackContext):
     """
-    [Optional / Legacy approach]
     Captures user messages, stores them, references them,
     and replies using generate_sentiment_aware_response() (GPT-3.5).
     """
@@ -195,9 +191,6 @@ def handle_user_message(update: Update, context: CallbackContext):
     update.message.reply_text(bot_reply)
 
 def build_memory_context(user_history: list) -> str:
-    """
-    Optionally build a short memory context from the last few messages.
-    """
     if not user_history:
         return "No recent messages stored."
     context_lines = []
@@ -219,9 +212,6 @@ def store_user_message(user_id: int, message: str):
         logger.error(f"Error storing user message: {e}", exc_info=True)
 
 def get_user_history(user_id: int, limit=5):
-    """
-    Fetch some recent messages for context.
-    """
     try:
         docs = list(
             memory_collection.find({"user_id": user_id})
@@ -259,7 +249,7 @@ def handle_group_message(update: Update, context: CallbackContext):
 ###############################################################################
 def meme_command(update: Update, context: CallbackContext):
     """
-    /meme [text] -> Overlays user text onto a random meme template from the 'templates/' folder.
+    /meme [text] -> Overlays user text onto a random meme template from 'templates/' folder.
     """
     user_input = update.message.text
     text_to_overlay = user_input.replace("/meme", "").strip()
@@ -356,15 +346,15 @@ def overlay_text_on_meme(template_path: str, text: str) -> str:
 ###############################################################################
 # SCHEDULING (Optional)
 ###############################################################################
-def schedule_telegram_tasks(updater):
+def schedule_telegram_tasks(application):
     """
     Example scheduled job posting an AI-generated image
     to a group chat at a specified time each day.
     """
-    schedule.every().day.at("10:00").do(send_scheduled_image, updater=updater)
+    schedule.every().day.at("10:00").do(send_scheduled_image, application=application)
     logger.info("Scheduled daily Chatty image at 10:00 AM.")
 
-def send_scheduled_image(updater):
+def send_scheduled_image(application):
     """
     Example scheduled job posting an AI-generated image
     to a specific group chat at 10:00 AM every day.
@@ -382,7 +372,7 @@ def send_scheduled_image(updater):
         return
 
     with open(filename, "rb") as f:
-        updater.bot.send_photo(chat_id=chat_id, photo=f, caption=f"Chatty at a {scene}!")
+        application.bot.send_photo(chat_id=chat_id, photo=f, caption=f"Chatty at a {scene}!")
     try:
         os.remove(filename)
     except Exception:
@@ -396,36 +386,35 @@ def run_telegram_bot():
         logger.error("No TELEGRAM_BOT_TOKEN set. Exiting.")
         return
 
-    updater = Updater(token=TELEGRAM_BOT_TOKEN, use_context=True)
-    dispatcher = updater.dispatcher
+    # Build the Application (v20+ style)
+    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
-    # Commands
-    dispatcher.add_handler(CommandHandler("start", start_command))
-    dispatcher.add_handler(CommandHandler("image", image_command))
-    dispatcher.add_handler(CommandHandler("meme", meme_command))
+    # Add command handlers
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("image", image_command))
+    application.add_handler(CommandHandler("meme", meme_command))
 
     # Group Admin: welcome new members
-    dispatcher.add_handler(ChatMemberHandler(welcome_new_member, ChatMemberHandler.CHAT_MEMBER))
+    application.add_handler(ChatMemberHandler(welcome_new_member, ChatMemberHandler.CHAT_MEMBER))
 
-    # Advanced spam detection (runs first => index=0)
-    dispatcher.add_handler(MessageHandler(filters.text & ~filters.command, advanced_spam_filter), 0)
+    # Advanced spam detection (runs first => group 0)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, advanced_spam_filter), 0)
 
-    # Then handle user messages in handle_group_message
-    dispatcher.add_handler(MessageHandler(filters.text & ~filters.command, handle_group_message), 1)
+    # Then handle user messages (group 1)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_group_message), 1)
 
     # (Optional) If you still want the older approach:
-    # dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_user_message), 2)
+    # application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_user_message), 2)
 
-    # Start polling
-    updater.start_polling()
+    # Start bot polling
     logger.info(
-        "Chatty_AI Telegram bot started with GPT-3.5 for spam checks / sentiment, "
+        "Chatty_AI Telegram bot starting with GPT-3.5 for spam checks/sentiment, "
         "GPT-4 for advanced responses, and positivity-based replies."
     )
+    schedule_telegram_tasks(application)  # optional scheduling
+    application.run_polling()
 
-    # Optional scheduled tasks
-    schedule_telegram_tasks(updater)
-
+    # Keep the app running to periodically check 'schedule'
     while True:
         schedule.run_pending()
         time.sleep(60)
