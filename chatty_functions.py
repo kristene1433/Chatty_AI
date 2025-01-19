@@ -35,7 +35,7 @@ MODERATION_CACHE = {}
 USER_RATE_LIMITS = {}
 
 # We'll track recently used themes here (adjust maxlen as needed).
-RECENT_THEMES = deque(maxlen=10)
+RECENT_THEMES = deque(maxlen=15)
 
 def check_rate_limit(user_id, max_requests=5, window_sec=60):
     now = datetime.utcnow()
@@ -452,7 +452,7 @@ def safe_truncate(text, max_len=220):
 def construct_tweet(text_content, max_len=220):
     """
     Builds the final tweet text by appending mention(s) or hashtags.
-    Then ensures it fits within `max_len` chars via safe_truncate.
+    Then ensures it fits within max_len chars via safe_truncate.
     """
     text_content = text_content.strip().strip('"').strip("'")
     # Remove existing hashtags if you want
@@ -720,7 +720,7 @@ def create_scene_content(theme, action=None):
 
 def expand_post_with_examples(original_text, max_len=220):
     """
-    Expands the post but keeps it strictly under `max_len` characters total.
+    Expands the post but keeps it strictly under max_len characters total.
     """
     system_prompt = (
         "You are a writing assistant. The user has a short social media post about AI or memecoins. "
@@ -1186,7 +1186,3 @@ def schedule_daily_challenge(client):
 
 def schedule_storytime(client):
     schedule.every().day.at("18:00").do(post_story_update, client=client)
-
-
-
-
