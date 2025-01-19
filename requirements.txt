@@ -9,3 +9,4 @@ numpy==1.25.2
 schedule==1.2.0
 runwayml
 rapidfuzz
+pillow==11.1.0

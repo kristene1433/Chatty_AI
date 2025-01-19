@@ -1,6 +1,24 @@
-# Example .gitignore
-venv/
-*.pyc
-__pycache__/
+
+
+# .gitignore
+
+# 1) Ignore the .env file so you don't commit sensitive tokens
 .env
+
+# 2) Ignore logs
 *.log
+application.log
+
+# 3) Byte-compiled / cached files
+__pycache__/
+*.pyc
+
+# 4) OS-specific files
+.DS_Store
+
+# 5) Virtual environment directories
+venv/
+.env/
+
+# 6) Data directories (if they contain generated or large files)
+generated_images/

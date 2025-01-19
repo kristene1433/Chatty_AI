@@ -40,6 +40,7 @@ required_env_vars = [
     "TWITTER_OAUTH1_ACCESS_TOKEN",
     "TWITTER_OAUTH1_ACCESS_SECRET",
     "TWITTER_BEARER_TOKEN",
+    "TELEGRAM_BOT_TOKEN",
     "OPENAI_API_KEY",
     "MONGODB_URI",
     "LOG_FILE"
@@ -69,6 +70,7 @@ ACCESS_TOKEN = os.getenv("TWITTER_OAUTH1_ACCESS_TOKEN")
 ACCESS_SECRET = os.getenv("TWITTER_OAUTH1_ACCESS_SECRET")
 BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN")
 MONGODB_URI = os.getenv("MONGODB_URI")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 # Directories for images and custom prompt files
 IMAGE_DIR = "generated_images"
