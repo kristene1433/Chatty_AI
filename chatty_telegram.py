@@ -11,10 +11,13 @@ from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont  # For meme text overlay
 
 from telegram import Update
+
+# NEW (v20+)
 from telegram.ext import (
-    Updater, CommandHandler, MessageHandler, Filters, CallbackContext,
+    Updater, CommandHandler, MessageHandler, filters, CallbackContext,
     ChatMemberHandler
 )
+
 
 from config_and_setup import (
     logger, TELEGRAM_BOT_TOKEN, memory_collection
@@ -405,10 +408,10 @@ def run_telegram_bot():
     dispatcher.add_handler(ChatMemberHandler(welcome_new_member, ChatMemberHandler.CHAT_MEMBER))
 
     # Advanced spam detection (runs first => index=0)
-    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, advanced_spam_filter), 0)
+    dispatcher.add_handler(MessageHandler(filters.text & ~filters.command, advanced_spam_filter), 0)
 
     # Then handle user messages in handle_group_message
-    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_group_message), 1)
+    dispatcher.add_handler(MessageHandler(filters.text & ~filters.command, handle_group_message), 1)
 
     # (Optional) If you still want the older approach:
     # dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_user_message), 2)
