@@ -6,6 +6,7 @@ import random
 import logging
 import schedule
 import requests
+import threading
 
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageFont  # For meme text overlay
@@ -13,7 +14,7 @@ from PIL import Image, ImageDraw, ImageFont  # For meme text overlay
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, filters,
-    ChatMemberHandler, CallbackContext
+    ChatMemberHandler, ContextTypes
 )
 
 from config_and_setup import (
@@ -26,7 +27,7 @@ from config_and_setup import (
 from chatty_core import (
     # GPT calls
     robust_chat_completion,
-    ADVANCED_MODEL,  # if you want references to the model constants
+    ADVANCED_MODEL,
 
     # Spam & content checks
     is_safe_to_respond,
@@ -38,7 +39,7 @@ from chatty_core import (
     detect_sentiment_and_subjectivity,
 
     # Greeting & memory logic
-    store_user_memory, 
+    store_user_memory,
     get_user_memory,
     handle_incoming_message,  # Uses GPT-4 logic automatically
 
@@ -58,43 +59,41 @@ from chatty_core import (
 ###############################################################################
 # START & IMAGE COMMANDS
 ###############################################################################
-def start_command(update: Update, context: CallbackContext):
-    """Greets the user with a short message."""
-    update.message.reply_text(
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Greets the user with a short message (async for v20)."""
+    await update.message.reply_text(
         "Hello! I'm Chatty_AI on Telegram. "
         "Type /meme [text] to create a comedic image, "
         "/image for a random AI pic, or just say hi!"
     )
 
-def image_command(update: Update, context: CallbackContext):
+async def image_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Generates an AI image using Chatty's random scene logic for Telegram."""
     chat_id = update.effective_chat.id
 
-    # 1) Pick a random theme from chatty_core
+    # 1) Pick a random theme
     theme = random.choice(themes_list)
-
-    # 2) Build a short scene description referencing Chatty + your theme
+    # 2) Build a short scene description
     text_scene = create_scene_content(theme)
-
     # 3) Convert that scene text into a short DALL·E prompt
     prompt = create_simplified_image_prompt(text_scene)
 
     # 4) Generate the DALL·E image with Telegram's 3000-char limit
     image_url = generate_image(prompt, max_length=MAX_PROMPT_LENGTH_TELEGRAM)
     if not image_url:
-        update.message.reply_text("Oops, couldn't generate an image right now.")
+        await update.message.reply_text("Oops, couldn't generate an image right now.")
         return
 
     # 5) Download the image locally
     filename = download_image(image_url, prompt="telegram_chatty")
     if not filename:
-        update.message.reply_text("Failed to download the image.")
+        await update.message.reply_text("Failed to download the image.")
         return
 
     # 6) Send the image back to the user
+    caption_text = f"Chatty exploring a '{theme}'!"
     with open(filename, "rb") as f:
-        caption_text = f"Chatty exploring a '{theme}'!"
-        context.bot.send_photo(chat_id=chat_id, photo=f, caption=caption_text)
+        await context.bot.send_photo(chat_id=chat_id, photo=f, caption=caption_text)
 
     # 7) Cleanup local file
     try:
@@ -105,78 +104,81 @@ def image_command(update: Update, context: CallbackContext):
 ###############################################################################
 # GROUP ADMIN (Welcome) & SPAM DETECTION
 ###############################################################################
-def welcome_new_member(update: Update, context: CallbackContext):
+async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Welcomes new users who join the group."""
-    for member in update.message.new_chat_members:
-        welcome_text = (
-            f"Welcome, {member.full_name}! ⭐️👋\n\n"
-            "I’m Chatty_AI, here to share positivity and AI insights. "
-            "Type /start or /help for commands!"
-        )
-        update.message.reply_text(welcome_text)
+    if update.message and update.message.new_chat_members:
+        for member in update.message.new_chat_members:
+            welcome_text = (
+                f"Welcome, {member.full_name}! ⭐️👋\n\n"
+                "I’m Chatty_AI, here to share positivity and AI insights. "
+                "Type /start or /help for commands!"
+            )
+            await update.message.reply_text(welcome_text)
 
-def advanced_spam_filter(update: Update, context: CallbackContext):
+async def advanced_spam_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Enhanced spam detection:
       1) Check for known blocked keywords.
       2) If borderline, ask GPT (gpt-3.5) "Is this spam?"
       3) If GPT says yes, delete.
     """
+    if not update.message:
+        return
+
     text = update.message.text or ""
 
     # 1) Basic blocked phrases
     blocked_phrases = ["click here", "join now", "free money", "t.me/", "http://", "https://"]
     if any(bp in text.lower() for bp in blocked_phrases):
         try:
-            update.message.delete()
+            await update.message.delete()  # MUST await in v20
             logger.info(f"[SpamFilter] Deleted obvious spam message: {text}")
         except Exception as e:
             logger.warning(f"[SpamFilter] Could not delete spam message: {e}")
         return
 
-    # 2) If it doesn't match obvious spam, do a GPT check (on BASIC_MODEL)
-    if is_suspicious_text_gpt_3_5(text):
+    # 2) If not obviously spam, check via GPT
+    if await is_suspicious_text_gpt_3_5(text):
         try:
-            update.message.delete()
+            await update.message.delete()
             logger.info(f"[GPT SpamFilter] Deleted GPT-classified spam: {text}")
         except Exception as e:
             logger.warning(f"[GPT SpamFilter] Could not delete GPT-flagged spam: {e}")
         return
 
-def is_suspicious_text_gpt_3_5(user_text: str) -> bool:
+async def is_suspicious_text_gpt_3_5(user_text: str) -> bool:
     """
     Calls GPT-3.5 with a prompt like "Is this message spam?"
     Return True if GPT indicates spam, False otherwise.
     """
-    try:
-        messages = [
-            {"role": "system", "content": "You are a helpful AI content moderator."},
-            {"role": "user", "content": (
-                "Determine if the following user message is spam or not. "
-                "Answer with only 'SPAM' or 'NOT SPAM'.\n\n"
-                f"Message: {user_text}"
-            )}
-        ]
-        resp = robust_chat_completion(messages, model=ADVANCED_MODEL, max_tokens=10, temperature=0.0)
-        if resp and "choices" in resp:
-            classification = resp["choices"][0]["message"]["content"].strip().upper()
-            logger.info(f"[GPT Spam] Classification: {classification}")
-            return classification.startswith("SPAM")
-        return False
-    except Exception as e:
-        logger.error(f"[GPT SpamFilter] Error classifying message: {e}", exc_info=True)
-        return False
+    # This function can be sync or async. We'll do a quick approach:
+    messages = [
+        {"role": "system", "content": "You are a helpful AI content moderator."},
+        {"role": "user", "content": (
+            "Determine if the following user message is spam or not. "
+            "Answer with only 'SPAM' or 'NOT SPAM'.\n\n"
+            f"Message: {user_text}"
+        )}
+    ]
+    resp = robust_chat_completion(messages, model=ADVANCED_MODEL, max_tokens=10, temperature=0.0)
+    if resp and "choices" in resp:
+        classification = resp["choices"][0]["message"]["content"].strip().upper()
+        logger.info(f"[GPT Spam] Classification: {classification}")
+        return classification.startswith("SPAM")
+    return False
 
 ###############################################################################
-# LEGACY USER-SPECIFIC MEMORY + SENTIMENT-AWARE REPLY (Optional)
+# LEGACY USER-SPECIFIC MEMORY + SENTIMENT-AWARE REPLY
 ###############################################################################
-def handle_user_message(update: Update, context: CallbackContext):
+async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Captures user messages, stores them, references them,
     and replies using generate_sentiment_aware_response() (GPT-3.5).
     """
+    if not update.message:
+        return
+
     user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
     user_text = update.message.text or ""
 
     store_user_message(user_id, user_text)
@@ -188,7 +190,7 @@ def handle_user_message(update: Update, context: CallbackContext):
         f"User says: {user_text}"
     )
     bot_reply = generate_sentiment_aware_response(combined_text)
-    update.message.reply_text(bot_reply)
+    await update.message.reply_text(bot_reply)
 
 def build_memory_context(user_history: list) -> str:
     if not user_history:
@@ -224,13 +226,16 @@ def get_user_history(user_id: int, limit=5):
         return []
 
 ###############################################################################
-# MAIN GROUP MESSAGE HANDLER (Uses handle_incoming_message from chatty_core)
+# MAIN GROUP MESSAGE HANDLER
 ###############################################################################
-def handle_group_message(update: Update, context: CallbackContext):
+async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Handles group messages and responds only to specific triggers.
-    It uses handle_incoming_message (which uses your advanced GPT-4 logic).
+    It uses handle_incoming_message (GPT-4 logic).
     """
+    if not update.message:
+        return
+
     user_id = str(update.effective_user.id)
     user_text = update.message.text or ""
     user_name = update.effective_user.first_name or "friend"
@@ -238,19 +243,24 @@ def handle_group_message(update: Update, context: CallbackContext):
     triggers = ["gm", "good morning", "gn", "good night", "chatty", "welcome", "to the moon"]
 
     if any(trigger in user_text.lower() for trigger in triggers):
-        response = handle_incoming_message(user_id, user_text, user_name=user_name)
-        if response:
-            update.message.reply_text(response)
+        reply_text = handle_incoming_message(user_id, user_text, user_name=user_name)
+        # handle_incoming_message is synchronous. It's fine if it returns a string.
+        # We'll just await the telegram call:
+        if reply_text:
+            await update.message.reply_text(reply_text)
     else:
         logger.info(f"Message ignored: {user_text}")
 
 ###############################################################################
 # AI MEME COMMAND
 ###############################################################################
-def meme_command(update: Update, context: CallbackContext):
+async def meme_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    /meme [text] -> Overlays user text onto a random meme template from 'templates/' folder.
+    /meme [text] -> Overlays user text onto a random meme template in 'templates/'.
     """
+    if not update.message:
+        return
+
     user_input = update.message.text
     text_to_overlay = user_input.replace("/meme", "").strip()
     if not text_to_overlay:
@@ -258,17 +268,17 @@ def meme_command(update: Update, context: CallbackContext):
 
     meme_template_path = pick_random_template("templates")
     if not meme_template_path:
-        update.message.reply_text("No meme templates found on server!")
+        await update.message.reply_text("No meme templates found on server!")
         return
 
     meme_file = overlay_text_on_meme(meme_template_path, text_to_overlay)
     if not meme_file:
-        update.message.reply_text("Failed to create meme. Check logs.")
+        await update.message.reply_text("Failed to create meme. Check logs.")
         return
 
     chat_id = update.effective_chat.id
     with open(meme_file, "rb") as f:
-        context.bot.send_photo(chat_id=chat_id, photo=f, caption="Here's your meme!")
+        await context.bot.send_photo(chat_id=chat_id, photo=f, caption="Here's your meme!")
     try:
         os.remove(meme_file)
     except:
@@ -344,6 +354,15 @@ def overlay_text_on_meme(template_path: str, text: str) -> str:
         return None
 
 ###############################################################################
+# ERROR HANDLER (optional but recommended)
+###############################################################################
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Logs errors that happen within handlers. Helps avoid unhandled exceptions.
+    """
+    logger.exception("An error occurred:", exc_info=context.error)
+
+###############################################################################
 # SCHEDULING (Optional)
 ###############################################################################
 def schedule_telegram_tasks(application):
@@ -372,11 +391,18 @@ def send_scheduled_image(application):
         return
 
     with open(filename, "rb") as f:
+        # Note this is synchronous because schedule is sync. It's okay for small tasks.
         application.bot.send_photo(chat_id=chat_id, photo=f, caption=f"Chatty at a {scene}!")
     try:
         os.remove(filename)
     except Exception:
         pass
+
+def run_scheduling_loop():
+    """Runs schedule in a separate thread so it doesn't block run_polling()."""
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
 
 ###############################################################################
 # MAIN BOT RUNNER
@@ -386,7 +412,7 @@ def run_telegram_bot():
         logger.error("No TELEGRAM_BOT_TOKEN set. Exiting.")
         return
 
-    # Build the Application (v20+ style)
+    # Build the async Application
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
     # Add command handlers
@@ -397,24 +423,25 @@ def run_telegram_bot():
     # Group Admin: welcome new members
     application.add_handler(ChatMemberHandler(welcome_new_member, ChatMemberHandler.CHAT_MEMBER))
 
+    # Add error handler
+    application.add_error_handler(error_handler)
+
     # Advanced spam detection (runs first => group 0)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, advanced_spam_filter), 0)
 
-    # Then handle user messages (group 1)
+    # Then handle group messages (group 1)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_group_message), 1)
 
     # (Optional) If you still want the older approach:
     # application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_user_message), 2)
 
-    # Start bot polling
-    logger.info(
-        "Chatty_AI Telegram bot starting with GPT-3.5 for spam checks/sentiment, "
-        "GPT-4 for advanced responses, and positivity-based replies."
-    )
-    schedule_telegram_tasks(application)  # optional scheduling
-    application.run_polling()
+    # Start the schedule in a separate thread
+    schedule_telegram_tasks(application)
+    threading.Thread(target=run_scheduling_loop, daemon=True).start()
 
-    # Keep the app running to periodically check 'schedule'
-    while True:
-        schedule.run_pending()
-        time.sleep(60)
+    # Run the bot (async)
+    logger.info(
+        "Chatty_AI Telegram bot starting (python-telegram-bot v20+). "
+        "Handlers are async, GPT calls are sync, and positivity rules!"
+    )
+    application.run_polling()
