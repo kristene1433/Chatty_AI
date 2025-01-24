@@ -39,7 +39,7 @@ from chatty_core import (
     auto_infer_action_from_text,
     create_scene_content,
     create_simplified_image_prompt,
-    generate_image,  # <-- We'll specify max_length=MAX_PROMPT_LENGTH_TWITTER here
+    generate_image,
     download_image,
     cleanup_images,
     themes_list,
@@ -52,7 +52,7 @@ from chatty_core import (
     # Model constants
     ADVANCED_MODEL,
     # NEW: Fuzzy matching function
-    is_guess_correct,  # <--- Fuzzy matching for guesses
+    is_guess_correct,
     # Data for riddles, challenges, etc.
     RIDDLES_LIST,
     CHALL_LIST,
@@ -60,7 +60,9 @@ from chatty_core import (
     STORY_LIST,
     is_too_similar_to_recent_tweets,
     # NAMED CONSTANT for prompt length
-    MAX_PROMPT_LENGTH_TWITTER
+    MAX_PROMPT_LENGTH_TWITTER,
+    # NEW LINK-INQUIRY LOGIC
+    check_link_inquiry
 )
 
 ###############################################################################
@@ -368,8 +370,9 @@ def post_to_twitter(client, post_count, force_image=False):
 def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None):
     """
     Build a GPT-based reply to a mention or comment, referencing conversation history
-    from posted tweets, but also checking if the mention is a guess at a riddle.
+    from posted tweets, but also checking if the mention is a guess at a riddle, etc.
     """
+
     # 1. Rate limit check
     if not check_rate_limit(user_id):
         return "Please wait a bit before sending more requests. 🤖"
@@ -379,49 +382,53 @@ def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None)
         logger.info(f"Skipping unsafe/filtered comment: {comment}")
         return "I’m here to discuss AI and technology topics! 🚀✨"
 
-    # 3. Possibly deflect if off-topic
+    # 3. # NEW LINK-INQUIRY LOGIC (check if user asked about Telegram, website, or X)
+    link_reply = check_link_inquiry(comment)
+    if link_reply:
+        return link_reply
+
+    # 4. Possibly deflect if off-topic
     deflection = deflect_unrelated_comments(comment)
     if deflection:
         return deflection
 
-    # 4. Check static FAQ
+    # 5. Check static FAQ
     faq = static_response(comment)
     if faq:
         return faq
 
-    # NEW: If this mention is replying to a riddle tweet, do a fuzzy guess check
+    # 6. If this mention is replying to a riddle tweet, do a fuzzy guess check
     if parent_id:
         parent_doc = posted_tweets_collection.find_one({"tweet_id": parent_id})
         if parent_doc and "riddle_answer" in parent_doc:
             correct_answer = parent_doc["riddle_answer"]
             if correct_answer:
-                # Use fuzzy matching from chatty_core
                 if is_guess_correct(comment, correct_answer, threshold=80):
                     return "That's correct! ⭐️ Great job solving the puzzle!"
                 else:
                     return "Not quite right, try another guess! 🤔"
-            # If no actual 'answer' was stored, continue below
+            # else continue
 
-    # 5. Summarize conversation from any parent tweet
+    # 7. Summarize conversation from any parent tweet
     full_convo = ""
     if parent_id:
         full_convo = build_conversation_path(parent_id)
     short_summary = summarize_text(full_convo)
 
-    # 6. Combine summary + user message, then generate a sentiment-aware response
+    # 8. Combine summary + user message, then generate a sentiment-aware response
     user_message = (
         f"Conversation so far (summary):\n{short_summary}\n\n"
         f"User says: {comment}"
     )
     bot_reply = generate_sentiment_aware_response(user_message)
 
-    # 7. Final moderation check on the bot reply
+    # 9. Final moderation check on the bot reply
     bot_reply = moderate_bot_output(bot_reply)
 
-    # 8. Log to file
+    # 10. Log to file
     log_response(comment, bot_reply)
 
-    # 9. If we have tweet_id, store the chain in posted_tweets_collection
+    # 11. If we have tweet_id, store the chain in posted_tweets_collection
     if tweet_id:
         posted_tweets_collection.update_one(
             {"tweet_id": tweet_id},
@@ -432,7 +439,7 @@ def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None)
             upsert=True
         )
 
-    # 10. Store user memory & embeddings
+    # 12. Store user memory & embeddings
     store_user_memory(user_id, bot_reply)
     try:
         emb = generate_embedding(bot_reply)

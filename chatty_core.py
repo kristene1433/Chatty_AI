@@ -633,7 +633,6 @@ def create_simplified_image_prompt(text_content):
             if "retro crt" not in prompt_result.lower():
                 prompt_result += " (retro CRT monitor style)"
 
-            # We let generate_image() do the final truncation based on the caller's chosen max_length
             logger.info(f"Simplified Chatty Prompt Created: {prompt_result}")
             return prompt_result
 
@@ -650,9 +649,7 @@ def create_simplified_image_prompt(text_content):
 def generate_image(prompt, max_length=MAX_PROMPT_LENGTH_TELEGRAM):
     """
     Generates an image using the DALL·E 3 model (IMAGE_MODEL).
-    Truncates the prompt if it exceeds 'max_length', which defaults
-    to MAX_PROMPT_LENGTH_TELEGRAM (3000).
-    For Twitter, we can call generate_image(..., max_length=MAX_PROMPT_LENGTH_TWITTER).
+    Truncates the prompt if it exceeds 'max_length'.
     """
     try:
         if len(prompt) > max_length:
@@ -1066,15 +1063,38 @@ def generate_sentiment_aware_response(user_text):
         return "Oops, I’m having trouble coming up with a cheerful response right now. 🤖"
 
 ###############################################################################
+# NEW LINK-INQUIRY LOGIC
+###############################################################################
+def check_link_inquiry(comment_text: str) -> str:
+    """
+    Checks if the comment is asking about Telegram, Website, or X.
+    Returns a short message containing the correct link if so, else None.
+    """
+    comment_lower = comment_text.lower()
+
+    # If user asks about Telegram
+    if "telegram" in comment_lower:
+        return "Sure thing! Join our Telegram: t.me/ChattyOnSolCTO"
+
+    # If user asks about website
+    if "website" in comment_lower or "web site" in comment_lower or "site" in comment_lower:
+        return "Check out our official website: https://chattyonsol.fun"
+
+    # If user asks about X (Twitter) main page
+    if "x account" in comment_lower or "x page" in comment_lower or "twitter" in comment_lower:
+        return "Here’s our main X page: @chattyonsolana"
+
+    return None
+
+###############################################################################
 # MAIN ENTRY POINT: handle_incoming_message
 ###############################################################################
 def handle_incoming_message(user_id, user_text, user_name=None):
     """
-    Main entry point for any user message.
+    Main entry point for any user message (if you also use this for Telegram or other).
     1. Check rate limit.
     2. If user_text is a greeting & cooldown not active => greet.
-    3. Otherwise store user memory & generate a sentiment-aware, always-positive, personality-driven response
-       using GPT-4o (ADVANCED_MODEL).
+    3. Otherwise store user memory & generate a sentiment-aware, always-positive, personality-driven response.
     """
     # 1. Rate limit check
     if not check_rate_limit(user_id):
@@ -1096,7 +1116,12 @@ def handle_incoming_message(user_id, user_text, user_name=None):
             record_greeting_time(user_id)
             return greet_msg
 
-    # 3. If not a greeting or cooldown blocked it => store user text & produce advanced response
+    # 3. # NEW: Check link inquiries (Telegram, website, X, etc.)
+    link_reply = check_link_inquiry(user_text)
+    if link_reply:
+        return link_reply
+
+    # 4. If not a greeting => store user text & produce advanced response
     store_user_memory(user_id, user_text)
 
     system_prompt = select_system_prompt()
