@@ -46,21 +46,9 @@ def main():
     post_count = load_post_count("post_count.txt")
     since_id = load_since_id("since_id.txt")
 
-    # ─────────────────────────────────────────────────────────────
-    # 3) **Post immediately** on startup:
-    post_count = post_to_twitter(client, post_count)  # This forces a post now
-    save_post_count("post_count.txt", post_count)
-    # ─────────────────────────────────────────────────────────────
-
-    # 4) Schedule tasks (e.g. random posting every 3 or 4 hours, mention checking)
+    # 3) Schedule tasks (e.g. random posting every 10 or 12 hours, mention checking)
     schedule_posting(client, post_count)
     schedule_mention_checking(client, since_id)
-
-    # Optionally schedule daily persona/riddle/challenge/story:
-    # schedule_daily_persona(client)
-    # schedule_riddle_of_the_day(client)
-    # schedule_daily_challenge(client)
-    # schedule_storytime(client)
 
     logger.info("Entering main loop for scheduled tasks...")
     while True:

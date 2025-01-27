@@ -575,7 +575,7 @@ def schedule_posting(client, post_count):
     """
     Example: schedule random auto-posting every 3 or 4 hours.
     """
-    hours = random.choice(10, 12)
+    hours = random.choice([10, 12])
     schedule.every(hours).hours.do(posting_task, client=client, post_count=post_count)
     logger.info(f"Scheduled posting to run every {hours} hours.")
 
