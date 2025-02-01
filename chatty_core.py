@@ -66,7 +66,7 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 # Use GPT-4 (or "gpt-4o") for advanced tasks, GPT-3.5 for simpler tasks,
 # and DALL·E 3 for image generation.
 ###############################################################################
-ADVANCED_MODEL = "gpt-o3-mini"         # or "gpt-4" if that's your advanced model
+ADVANCED_MODEL = "gpt-4o"         # or "gpt-4" if that's your advanced model
 BASIC_MODEL    = "gpt-3.5-turbo"
 IMAGE_MODEL    = "dall-e-3"
 
