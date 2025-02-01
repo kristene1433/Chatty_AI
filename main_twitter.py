@@ -18,7 +18,7 @@ from chatty_twitter import (
     save_since_id,
     schedule_posting,
     schedule_mention_checking,
-    post_to_twitter,
+    post_to_twitter
     # If you want daily persona/riddle/challenge/story:
     # schedule_daily_persona,
     # schedule_riddle_of_the_day,
@@ -46,9 +46,18 @@ def main():
     post_count = load_post_count("post_count.txt")
     since_id = load_since_id("since_id.txt")
 
-    # 3) Schedule tasks (e.g. random posting every 10 or 12 hours, mention checking)
+    # 3) Immediately post when first deployed
+    logger.info("Posting immediately upon startup...")
+    post_count = post_to_twitter(client, post_count)
+    save_post_count("post_count.txt", post_count)
+
+    # 4) Schedule tasks (random posting, mention checking, etc.)
     schedule_posting(client, post_count)
     schedule_mention_checking(client, since_id)
+    # schedule_daily_persona(client)
+    # schedule_riddle_of_the_day(client)
+    # schedule_daily_challenge(client)
+    # schedule_storytime(client)
 
     logger.info("Entering main loop for scheduled tasks...")
     while True:
