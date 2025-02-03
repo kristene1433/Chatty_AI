@@ -1,4 +1,4 @@
-# chatty_twitter.py
+# twitter_chatty.py
 
 import re
 import os
@@ -145,12 +145,28 @@ def save_since_id(file_name, since_id):
         logger.error(f"Error saving since_id to {file_name}: {e}", exc_info=True)
 
 ###############################################################################
+# NORMALIZATION FUNCTION FOR MEMECOIN REFERENCES
+###############################################################################
+def normalize_memecoin_references(text):
+    """
+    Replaces generic memecoin mentions with 'Chatty memecoin'
+    and updates hashtag references accordingly.
+    """
+    # Replace any occurrence of "memecoin" (in any case) with "Chatty memecoin"
+    normalized = re.sub(r'\bmemecoin\b', 'Chatty memecoin', text, flags=re.IGNORECASE)
+    # Replace hashtag references such as "#MEMECOIN" with "#CHATTY"
+    normalized = re.sub(r'#\s*memecoin', '#CHATTY', normalized, flags=re.IGNORECASE)
+    return normalized
+
+###############################################################################
 # BUILDING & POSTING TWEETS
 ###############################################################################
 def construct_tweet(text_content):
     """
     Builds the final tweet text by optionally appending hashtags,
     mention to your main handle, etc. Then returns the raw text.
+    This function now also normalizes any generic memecoin references
+    to use only "Chatty memecoin".
     """
     text_content = text_content.strip().strip('"').strip("'")
 
@@ -169,7 +185,12 @@ def construct_tweet(text_content):
 
     final_text = f"{no_hashtags} {' '.join(tags)}"
     # Now do a final safe truncate to 280
-    return safe_truncate(final_text, 280)
+    final_text = safe_truncate(final_text, 280)
+    
+    # Normalize memecoin references to ensure only "Chatty memecoin" is used
+    final_text = normalize_memecoin_references(final_text)
+    
+    return final_text
 
 def post_daily_persona(client):
     """
