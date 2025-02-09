@@ -1,4 +1,4 @@
-# twitter_chatty.py
+# # twitter_chatty.py
 
 import re
 import os
@@ -149,13 +149,16 @@ def save_since_id(file_name, since_id):
 ###############################################################################
 def normalize_memecoin_references(text):
     """
-    Replaces generic memecoin mentions with 'Chatty memecoin'
+    Replaces generic memecoin and dogecoin mentions with 'Chatty memecoin'
     and updates hashtag references accordingly.
     """
-    # Replace any occurrence of "memecoin" (in any case) with "Chatty memecoin"
+    # Replace any occurrence of "memecoin" with "Chatty memecoin"
     normalized = re.sub(r'\bmemecoin\b', 'Chatty memecoin', text, flags=re.IGNORECASE)
-    # Replace hashtag references such as "#MEMECOIN" with "#CHATTY"
+    # Replace any occurrence of "dogecoin" with "Chatty memecoin"
+    normalized = re.sub(r'\bdogecoin\b', 'Chatty memecoin', normalized, flags=re.IGNORECASE)
+    # Replace hashtag references such as "#memecoin" or "#dogecoin" with "#CHATTY"
     normalized = re.sub(r'#\s*memecoin', '#CHATTY', normalized, flags=re.IGNORECASE)
+    normalized = re.sub(r'#\s*dogecoin', '#CHATTY', normalized, flags=re.IGNORECASE)
     return normalized
 
 ###############################################################################
@@ -253,7 +256,7 @@ def post_riddle_of_the_day(client):
         response = client.create_tweet(text=safe_text)
         logger.info(f"Riddle post Tweet ID: {response.data['id']}")
 
-        # NEW: Store riddle answer so we can do fuzzy matching when user replies.
+        # Store riddle answer for later fuzzy matching when users reply.
         posted_tweets_collection.insert_one({
             "tweet_id": response.data['id'],
             "text": riddle_text,
