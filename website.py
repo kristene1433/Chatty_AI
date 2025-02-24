@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify, send_file
+from flask_cors import CORS  # Import CORS for cross-origin requests
 import os
 import random
 from chatty_core import (
@@ -10,6 +11,9 @@ from chatty_core import (
 )
 
 app = Flask(__name__)
+CORS(app, resources={r"/*": {"origins": "*"}})  # Allow all origins (for debugging)
+# If you want to restrict to only Shopify, replace "*" with your actual Shopify domain:
+# CORS(app, resources={r"/*": {"origins": "https://your-shopify-store.myshopify.com"}})
 
 @app.route("/")
 def home():
@@ -48,9 +52,8 @@ def serve_meme(filename):
         return send_file(image_path, mimetype="image/png")
     return "Image not found", 404
 
-
 if __name__ == "__main__":
-    import os
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port, debug=True)
+
 

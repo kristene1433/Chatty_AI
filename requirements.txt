@@ -13,3 +13,5 @@ pillow==11.1.0
 python-telegram-bot==20.3
 Flask==2.2.2
 Werkzeug==2.2.2
+flask-cors
+
