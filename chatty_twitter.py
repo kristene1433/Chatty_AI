@@ -543,7 +543,8 @@ def respond_to_mentions(client, since_id):
             parent_id = mention.referenced_tweets[0].id
 
         # Minimal addition: parse mention_time from mention.created_at
-        mention_time = datetime.strptime(mention.created_at, "%Y-%m-%dT%H:%M:%S.%fZ")
+        mention_time = mention.created_at
+
 
         # Call handle_incoming_message with comment_time
         reply_text = handle_incoming_message(
