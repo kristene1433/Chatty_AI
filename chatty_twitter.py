@@ -7,6 +7,8 @@ import traceback
 import tweepy
 import schedule
 from datetime import datetime
+from chatty_core import handle_incoming_message
+
 
 from config_and_setup import (
     logger,  # shared logger
@@ -482,11 +484,10 @@ def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None)
 
 def respond_to_mentions(client, since_id):
     """
-    Fetch new mentions since 'since_id', generate replies using handle_comment_with_context(),
-    then post the replies. Returns the new 'since_id' after processing.
-
-    We'll apply sentence-based truncation to keep replies from cutting off mid-sentence.
+    Fetch new mentions since 'since_id', generate replies using handle_incoming_message(),
+    then post the replies.
     """
+
     me = client.get_me()
     bot_user_id = me.data.id
     logger.info(f"Bot User ID: {bot_user_id}")
@@ -522,9 +523,7 @@ def respond_to_mentions(client, since_id):
         author_id = mention.author_id
         username = user_map.get(author_id, "unknown_user")
 
-        logger.info(f"Processing mention {mention_id} from author {author_id} (@{username})")
-
-        # Check if we've already responded to this mention
+        # Check if we've already responded
         if mentions_collection.find_one({'tweet_id': mention_id}):
             logger.info(f"Already responded to mention {mention_id}. Skipping.")
             continue
@@ -543,32 +542,38 @@ def respond_to_mentions(client, since_id):
         if mention.referenced_tweets:
             parent_id = mention.referenced_tweets[0].id
 
-        reply_text = handle_comment_with_context(
-            user_id=author_id,
-            comment=mention.text,
-            tweet_id=mention_id,
-            parent_id=parent_id
+        # Minimal addition: parse mention_time from mention.created_at
+        mention_time = datetime.strptime(mention.created_at, "%Y-%m-%dT%H:%M:%S.%fZ")
+
+        # Call handle_incoming_message with comment_time
+        reply_text = handle_incoming_message(
+        user_id=author_id,
+        user_text=mention.text,
+        user_name=username,
+        comment_time=mention_time
         )
-        if reply_text:
-            # Combine with @username
-            full_reply = f"@{username} {reply_text}"
 
-            # Use sentence-based truncation for replies
-            final_reply = safe_truncate_by_sentence_no_ellipsis(
-                full_reply, 
-                max_len=260, 
-                conclusion="Stay curious! ⭐️"
-            )
 
-            logger.debug(f"Reply Text: {final_reply}")
-            try:
-                client.create_tweet(text=final_reply, in_reply_to_tweet_id=mention_id)
-                logger.info(f"Replied to mention {mention_id}")
-                mentions_collection.insert_one({'tweet_id': mention_id, 'replied_at': datetime.utcnow()})
-            except Exception as e:
-                logger.error(f"Error replying to mention {mention_id}: {e}", exc_info=True)
-        else:
-            logger.warning(f"Failed to generate response for mention {mention_id}.")
+        # If it's None, skip
+        if reply_text is None:
+            logger.info(f"Skipping mention {mention_id} because it's older than deployment.")
+            continue
+
+        # Otherwise, post a reply
+        full_reply = f"@{username} {reply_text}"
+        final_reply = safe_truncate_by_sentence_no_ellipsis(
+            full_reply,
+            max_len=260,
+            conclusion="Stay curious! ⭐️"
+        )
+
+        logger.debug(f"Reply Text: {final_reply}")
+        try:
+            client.create_tweet(text=final_reply, in_reply_to_tweet_id=mention_id)
+            logger.info(f"Replied to mention {mention_id}")
+            mentions_collection.insert_one({'tweet_id': mention_id, 'replied_at': datetime.utcnow()})
+        except Exception as e:
+            logger.error(f"Error replying to mention {mention_id}: {e}", exc_info=True)
 
     return new_since_id
 

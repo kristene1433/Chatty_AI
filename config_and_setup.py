@@ -103,6 +103,18 @@ try:
     logger.info("chatty_instructions collection is ready.")
 
     logger.info("Connected to MongoDB Atlas successfully.")
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Minimal addition: Store or update a deployment timestamp
+    # ──────────────────────────────────────────────────────────────────────────
+    DEPLOYMENT_TIMESTAMP = datetime.utcnow()
+    db.settings.update_one(
+        {"key": "deployment_timestamp"},
+        {"$set": {"value": DEPLOYMENT_TIMESTAMP}},
+        upsert=True
+    )
+    logger.info(f"Deployment timestamp set: {DEPLOYMENT_TIMESTAMP}")
+
 except Exception as e:
     logger.error(f"Error connecting to MongoDB: {e}")
     traceback.print_exc()

@@ -1087,13 +1087,22 @@ def check_link_inquiry(comment_text: str) -> str:
 ###############################################################################
 # MAIN ENTRY POINT: handle_incoming_message
 ###############################################################################
-def handle_incoming_message(user_id, user_text, user_name=None):
+def handle_incoming_message(user_id, user_text, user_name=None, comment_time=None):
     """
-    Main entry point for any user message (if you also use this for Telegram or other).
-    1. Check rate limit.
-    2. If user_text is a greeting & cooldown not active => greet.
-    3. Otherwise store user memory & generate a sentiment-aware, always-positive, personality-driven response.
+    Main entry point for any user message (for Twitter, Telegram, etc.).
+    1. Optionally checks if 'comment_time' is older than deployment timestamp -> skip if so.
+    2. Check rate limit
+    3. Check greeting logic
+    4. If not a greeting => store text & produce advanced response
     """
+
+    # NEW - minimal addition: retrieve deployment timestamp and skip old messages
+    deployment_record = db.settings.find_one({"key": "deployment_timestamp"})
+    deployment_timestamp = deployment_record["value"] if deployment_record else None
+    if comment_time and deployment_timestamp and comment_time < deployment_timestamp:
+        logger.info(f"Skipping old message from user {user_id} (before deployment).")
+        return None
+
     # 1. Rate limit check
     if not check_rate_limit(user_id):
         return "You’re sending messages too quickly. Let’s slow down just a bit, friend! 🤖"
@@ -1114,12 +1123,12 @@ def handle_incoming_message(user_id, user_text, user_name=None):
             record_greeting_time(user_id)
             return greet_msg
 
-    # 3. # NEW: Check link inquiries (Telegram, website, X, etc.)
+    # 3. Check link inquiries
     link_reply = check_link_inquiry(user_text)
     if link_reply:
         return link_reply
 
-    # 4. If not a greeting => store user text & produce advanced response
+    # 4. Store user text & produce advanced response
     store_user_memory(user_id, user_text)
 
     system_prompt = select_system_prompt()
@@ -1141,6 +1150,5 @@ def handle_incoming_message(user_id, user_text, user_name=None):
             "What’s on your mind today? 🤖"
         )
 
-    # Ensure positivity and return
     final_text = ensure_positive_tone(response.choices[0].message.content.strip())
     return final_text
