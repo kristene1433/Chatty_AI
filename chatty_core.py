@@ -36,7 +36,7 @@ except ImportError:
 # NAMED CONSTANTS FOR PROMPT LENGTH
 ###############################################################################
 MAX_PROMPT_LENGTH_TWITTER = 8000    # Use for Twitter image generation
-MAX_PROMPT_LENGTH_TELEGRAM = 3000   # Use for Telegram image generation
+MAX_PROMPT_LENGTH_TELEGRAM = 5000   # Use for Telegram image generation
 
 ###############################################################################
 # GLOBAL CACHES AND RATE LIMITS

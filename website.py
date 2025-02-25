@@ -38,9 +38,9 @@ def create_meme():
         image_path = download_image(generated_url, prompt)
         if not image_path:
             return jsonify({"error": "Image download failed."}), 500
-        # Return a relative URL for the generated image
-        image_url = "/meme_image/" + os.path.basename(image_path)
-        return jsonify({"image_url": image_url})
+        # Ensure the correct absolute path for serving the image
+        image_filename = os.path.basename(image_path)
+        return jsonify({"image_url": f"/meme_image/{image_filename}"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -55,5 +55,3 @@ def serve_meme(filename):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
-
-
