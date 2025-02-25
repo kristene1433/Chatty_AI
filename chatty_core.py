@@ -1,5 +1,3 @@
-# chatty_core.py
-
 import os
 import glob
 import json
@@ -398,7 +396,7 @@ def store_posted_tweet(tweet_text):
 ###############################################################################
 def is_guess_correct(user_guess, correct_answer, threshold=80):
     """
-    Returns True if `user_guess` is sufficiently close to `correct_answer`,
+    Returns True if user_guess is sufficiently close to correct_answer,
     using fuzzy matching if rapidfuzz is installed. Otherwise, falls back
     to strict equality.
     """
