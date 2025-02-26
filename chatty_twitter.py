@@ -129,19 +129,33 @@ def normalize_memecoin_references(text):
 # BUILDING & POSTING TWEETS
 ###############################################################################
 def construct_tweet(text_content):
+    # Clean up quotes/spaces
     text_content = text_content.strip().strip('"').strip("'")
-    text_content = text_content[:240].rstrip()
-    # Remove existing hashtags
+    # Truncate to 220 chars to allow room for mention & hashtag
+    text_content = text_content[:220].rstrip()
+    
+    # Remove any existing hashtags from the text
     no_hashtags = re.sub(r"#\w+", "", text_content).strip()
+    
+    # Pool of possible hashtags (removed #GPT4)
     extra_tags_pool = [
-        "#ChatGPT", "#OpenAI", "#GPT4", "#AI", "#CHATTY"
+        "#ChatGPT", "#OpenAI", "#AI", "#CHATTY"
     ]
-    pick = random.choice(extra_tags_pool)
-    # Always include explicit mentions for branding
-    mentions = "@OpenAI @ChatGPTapp"
-    final_text = f"{no_hashtags} {mentions} {pick}"
+    chosen_hashtag = random.choice(extra_tags_pool)
+    
+    # Rotate the mention between @OpenAI and @ChatGPTapp
+    mention_pool = ["@OpenAI", "@ChatGPTapp"]
+    chosen_mention = random.choice(mention_pool)
+    
+    # Construct final tweet text with one mention & one hashtag
+    final_text = f"{no_hashtags} {chosen_mention} {chosen_hashtag}"
+    
+    # Safely truncate to 280 in case it exceeds the limit
     final_text = safe_truncate(final_text, 280)
+    
+    # Normalize memecoin references (e.g., turning “memecoin” to “Chatty meme coin”)
     final_text = normalize_memecoin_references(final_text)
+    
     return final_text
 
 def post_daily_persona(client):
@@ -224,7 +238,6 @@ def post_story_update(client):
 
 def post_to_twitter(client, post_count, force_image=False):
     try:
-        # Use our specialized themed post
         text_content = generate_themed_post()
         expanded_text = expand_post_with_examples(text_content)
         if is_too_similar_to_recent_tweets(expanded_text, similarity_threshold=0.95, lookback=10):
@@ -234,7 +247,6 @@ def post_to_twitter(client, post_count, force_image=False):
         tweet_text = safe_truncate(tweet_text, 280)
         logger.info("Including image in this post (every post).")
         inferred_action = auto_infer_action_from_text(expanded_text)
-        # Build scene content with our specialized theme
         scene_content = create_scene_content(expanded_text, action=inferred_action)
         img_prompt = create_simplified_image_prompt(scene_content)
         img_url = generate_image(img_prompt, max_length=MAX_PROMPT_LENGTH_TWITTER)
@@ -341,7 +353,6 @@ def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None)
             logger.info("Stored embedding for semantic search.")
     except Exception as e:
         logger.error(f"Error storing embedding: {e}", exc_info=True)
-    # Append a question about OpenAI/ChatGPT to further reinforce the theme.
     return f"{bot_reply} 🤖✨ What do you think about the latest from OpenAI ChatGPT?"
 
 def respond_to_mentions(client, since_id):
