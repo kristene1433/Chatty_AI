@@ -9,7 +9,6 @@ import schedule
 from datetime import datetime
 from chatty_core import handle_incoming_message
 
-
 from config_and_setup import (
     logger,  # shared logger
     mentions_collection,  # DB collections from your config
@@ -174,27 +173,21 @@ def construct_tweet(text_content):
     to use only "Chatty memecoin".
     """
     text_content = text_content.strip().strip('"').strip("'")
-
     # EARLY TRUNCATION to ~240 so we have space for extra tags
     text_content = text_content[:240].rstrip()
-
     # Optionally remove existing hashtags
     no_hashtags = re.sub(r"#\w+", "", text_content).strip()
-
     extra_tags_pool = [
         "#HeyChatty", "#AIforEveryone", "#MEMECOIN", "$CHATTY",
         "#AImeme", "#AIagent"
     ]
     pick = random.choice(extra_tags_pool)
     tags = ["@chattyonsolana", pick]
-
     final_text = f"{no_hashtags} {' '.join(tags)}"
     # Now do a final safe truncate to 280
     final_text = safe_truncate(final_text, 280)
-    
     # Normalize memecoin references to ensure only "Chatty memecoin" is used
     final_text = normalize_memecoin_references(final_text)
-    
     return final_text
 
 def post_daily_persona(client):
@@ -205,14 +198,12 @@ def post_daily_persona(client):
     if not PERSONAS_LIST:
         logger.warning("No personas loaded. Skipping persona post.")
         return
-
     persona = random.choice(PERSONAS_LIST)
     user_prompt = (
         f"You are {persona}. Write a short social media post describing a 'day in the life' "
         "and end with a fun question. Keep under 280 chars."
     )
     system_prompt = "You are Chatty_AI, bright and playful..."
-
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt}
@@ -229,7 +220,6 @@ def post_daily_persona(client):
             text_content = completion.choices[0].message.content.strip()
         else:
             text_content = "I'm living a bright day as a persona—what's your next move? #chatty"
-
         tweet_text = construct_tweet(text_content)
         safe_text = safe_truncate(tweet_text, 280)
         response = client.create_tweet(text=safe_text)
@@ -246,18 +236,15 @@ def post_riddle_of_the_day(client):
     if not RIDDLES_LIST:
         logger.warning("No riddles loaded. Skipping riddle post.")
         return
-
     riddle = random.choice(RIDDLES_LIST)
     question = riddle.get("question", "What's the puzzle?")
     answer = riddle.get("answer", None)  # <--- For fuzzy matching
     riddle_text = f"Puzzle Time: {question}\nReply with your guess! #chatty #PuzzleTime"
-
     try:
         tweet_text = construct_tweet(riddle_text)
         safe_text = safe_truncate(tweet_text, 280)
         response = client.create_tweet(text=safe_text)
         logger.info(f"Riddle post Tweet ID: {response.data['id']}")
-
         # Store riddle answer for later fuzzy matching when users reply.
         posted_tweets_collection.insert_one({
             "tweet_id": response.data['id'],
@@ -265,7 +252,6 @@ def post_riddle_of_the_day(client):
             "riddle_answer": answer,
             "timestamp": datetime.utcnow()
         })
-
     except Exception as e:
         logger.error(f"Error posting riddle: {e}", exc_info=True)
 
@@ -276,7 +262,6 @@ def post_challenge_of_the_day(client):
     if not CHALL_LIST:
         logger.warning("No challenges loaded. Skipping challenge post.")
         return
-
     challenge = random.choice(CHALL_LIST)
     challenge_text = f"Challenge time: {challenge}\nShare your thoughts! #chatty #Challenge"
     try:
@@ -294,11 +279,9 @@ def post_story_update(client):
     if not STORY_LIST:
         logger.warning("No stories loaded. Skipping story post.")
         return
-
     story_snippet = random.choice(STORY_LIST)
     text = story_snippet.get('text', 'Once upon a time, Chatty...')
     story_text = f"Story Time: {text}\nWhat happens next? #chatty #Story"
-
     try:
         tweet_text = construct_tweet(story_text)
         safe_text = safe_truncate(tweet_text, 280)
@@ -315,33 +298,26 @@ def post_to_twitter(client, post_count, force_image=False):
     try:
         theme = random.choice(themes_list)
         logger.info(f"Randomly chosen theme: {theme}")
-
         text_content = generate_themed_post(theme)
         expanded_text = expand_post_with_examples(text_content)
-
         # Check if it's too similar to recent tweets
         if is_too_similar_to_recent_tweets(expanded_text, similarity_threshold=0.95, lookback=10):
             logger.warning("Expanded post is too similar to a recent tweet. Using fallback instead.")
             expanded_text = "Exciting times in AI! Stay tuned, #AICommunity 🤖🚀"
-
         # Build final tweet text
         tweet_text = construct_tweet(expanded_text)
         tweet_text = safe_truncate(tweet_text, 280)
-
         logger.info("Including image in this post (every post).")
         inferred_action = auto_infer_action_from_text(expanded_text)
         scene_content = create_scene_content(theme, action=inferred_action)
         img_prompt = create_simplified_image_prompt(scene_content)
-
         # Use the 8000-character prompt limit for Twitter
         img_url = generate_image(img_prompt, max_length=MAX_PROMPT_LENGTH_TWITTER)
         image_path = None
-
         if img_url:
             image_path = download_image(img_url, img_prompt)
         else:
             logger.warning("Failed to generate image. Skipping image for this post.")
-
         if image_path:
             try:
                 auth = tweepy.OAuth1UserHandler(
@@ -354,17 +330,14 @@ def post_to_twitter(client, post_count, force_image=False):
                 media = api_v1.media_upload(filename=image_path)
                 media_id = media.media_id
                 logger.info(f"Uploaded media ID: {media_id}")
-
                 client.create_tweet(text=tweet_text, media_ids=[media_id])
                 logger.info("Tweet with image posted successfully!")
-
                 # Clean up local image file
                 try:
                     os.remove(image_path)
                     logger.info(f"Deleted local image file: {image_path}")
                 except Exception as e:
                     logger.error(f"Error deleting image file: {e}", exc_info=True)
-
             except Exception as e:
                 logger.error(f"Error posting tweet with image: {e}", exc_info=True)
                 traceback.print_exc()
@@ -380,12 +353,10 @@ def post_to_twitter(client, post_count, force_image=False):
             except Exception as e:
                 logger.error(f"Error posting tweet without image: {e}", exc_info=True)
                 traceback.print_exc()
-
         store_posted_tweet(expanded_text)
         cleanup_images(os.getenv("IMAGE_DIR", "generated_images"), max_files=100)
         post_count += 1
         return post_count
-
     except Exception as e:
         logger.error(f"Unexpected error in post_to_twitter: {e}", exc_info=True)
         return post_count
@@ -398,31 +369,25 @@ def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None)
     Build a GPT-based reply to a mention or comment, referencing conversation history
     from posted tweets, but also checking if the mention is a guess at a riddle, etc.
     """
-
     # 1. Rate limit check
     if not check_rate_limit(user_id):
         return "Please wait a bit before sending more requests. 🤖"
-
     # 2. Filter out prohibited/spammy content
     if not is_safe_to_respond(comment) or not moderate_content(comment):
         logger.info(f"Skipping unsafe/filtered comment: {comment}")
         return "I’m here to discuss AI and technology topics! 🚀✨"
-
     # 3. # NEW LINK-INQUIRY LOGIC (check if user asked about Telegram, website, or X)
     link_reply = check_link_inquiry(comment)
     if link_reply:
         return link_reply
-
     # 4. Possibly deflect if off-topic
     deflection = deflect_unrelated_comments(comment)
     if deflection:
         return deflection
-
     # 5. Check static FAQ
     faq = static_response(comment)
     if faq:
         return faq
-
     # 6. If this mention is replying to a riddle tweet, do a fuzzy guess check
     if parent_id:
         parent_doc = posted_tweets_collection.find_one({"tweet_id": parent_id})
@@ -433,27 +398,21 @@ def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None)
                     return "That's correct! ⭐️ Great job solving the puzzle!"
                 else:
                     return "Not quite right, try another guess! 🤔"
-            # else continue
-
     # 7. Summarize conversation from any parent tweet
     full_convo = ""
     if parent_id:
         full_convo = build_conversation_path(parent_id)
     short_summary = summarize_text(full_convo)
-
     # 8. Combine summary + user message, then generate a sentiment-aware response
     user_message = (
         f"Conversation so far (summary):\n{short_summary}\n\n"
         f"User says: {comment}"
     )
     bot_reply = generate_sentiment_aware_response(user_message)
-
     # 9. Final moderation check on the bot reply
     bot_reply = moderate_bot_output(bot_reply)
-
     # 10. Log to file
     log_response(comment, bot_reply)
-
     # 11. If we have tweet_id, store the chain in posted_tweets_collection
     if tweet_id:
         posted_tweets_collection.update_one(
@@ -464,7 +423,6 @@ def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None)
             }},
             upsert=True
         )
-
     # 12. Store user memory & embeddings
     store_user_memory(user_id, bot_reply)
     try:
@@ -479,7 +437,6 @@ def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None)
             logger.info("Stored embedding for semantic search.")
     except Exception as e:
         logger.error(f"Error storing embedding: {e}", exc_info=True)
-
     return bot_reply
 
 def respond_to_mentions(client, since_id):
@@ -487,11 +444,9 @@ def respond_to_mentions(client, since_id):
     Fetch new mentions since 'since_id', generate replies using handle_incoming_message(),
     then post the replies.
     """
-
     me = client.get_me()
     bot_user_id = me.data.id
     logger.info(f"Bot User ID: {bot_user_id}")
-
     params = {
         'expansions': ['author_id', 'in_reply_to_user_id', 'referenced_tweets.id'],
         'tweet_fields': [
@@ -503,63 +458,49 @@ def respond_to_mentions(client, since_id):
     }
     if since_id:
         params['since_id'] = since_id
-
     logger.info("Fetching recent mentions...")
     mentions_resp = client.get_users_mentions(id=bot_user_id, **params)
     if not mentions_resp.data:
         logger.info("No new mentions found.")
         return since_id
-
     logger.info(f"Fetched {len(mentions_resp.data)} mentions.")
     user_map = {}
     if mentions_resp.includes and 'users' in mentions_resp.includes:
         for usr in mentions_resp.includes['users']:
             user_map[usr.id] = usr.username
-
     new_since_id = max(int(m.id) for m in mentions_resp.data)
-
     for mention in mentions_resp.data:
         mention_id = mention.id
         author_id = mention.author_id
         username = user_map.get(author_id, "unknown_user")
-
         # Check if we've already responded
         if mentions_collection.find_one({'tweet_id': mention_id}):
             logger.info(f"Already responded to mention {mention_id}. Skipping.")
             continue
-
         # Skip if from self
         if author_id == bot_user_id:
             logger.info(f"Skipping mention {mention_id} from self.")
             continue
-
         # Another quick spam check
         if not is_safe_to_respond(mention.text):
             logger.info(f"Skipped mention due to prohibited content: {mention.text}")
             continue
-
         parent_id = None
         if mention.referenced_tweets:
             parent_id = mention.referenced_tweets[0].id
-
-        # Minimal addition: parse mention_time from mention.created_at
-        mention_time = mention.created_at
-
-
+        # Convert mention.created_at to a naive datetime (remove timezone)
+        mention_time = mention.created_at.replace(tzinfo=None)
         # Call handle_incoming_message with comment_time
         reply_text = handle_incoming_message(
-        user_id=author_id,
-        user_text=mention.text,
-        user_name=username,
-        comment_time=mention_time
+            user_id=author_id,
+            user_text=mention.text,
+            user_name=username,
+            comment_time=mention_time
         )
-
-
         # If it's None, skip
         if reply_text is None:
             logger.info(f"Skipping mention {mention_id} because it's older than deployment.")
             continue
-
         # Otherwise, post a reply
         full_reply = f"@{username} {reply_text}"
         final_reply = safe_truncate_by_sentence_no_ellipsis(
@@ -567,7 +508,6 @@ def respond_to_mentions(client, since_id):
             max_len=260,
             conclusion="Stay curious! ⭐️"
         )
-
         logger.debug(f"Reply Text: {final_reply}")
         try:
             client.create_tweet(text=final_reply, in_reply_to_tweet_id=mention_id)
@@ -575,7 +515,6 @@ def respond_to_mentions(client, since_id):
             mentions_collection.insert_one({'tweet_id': mention_id, 'replied_at': datetime.utcnow()})
         except Exception as e:
             logger.error(f"Error replying to mention {mention_id}: {e}", exc_info=True)
-
     return new_since_id
 
 ###############################################################################
