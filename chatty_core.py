@@ -62,7 +62,7 @@ openai.api_key = os.getenv("OPENAI_API_KEY")
 ###############################################################################
 # MODEL CONSTANTS
 ###############################################################################
-ADVANCED_MODEL = "gpt-4.5-preview"         # or "gpt-4" if that's your advanced model
+ADVANCED_MODEL = "gpt-4o"         # or "gpt-4" if that's your advanced model
 BASIC_MODEL    = "gpt-3.5-turbo"
 IMAGE_MODEL    = "dall-e-3"
 
