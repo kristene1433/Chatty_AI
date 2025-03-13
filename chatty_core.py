@@ -104,7 +104,7 @@ SYSTEM_PROMPTS = [
         "You are Chatty_AI, a bright, playful, happy, and witty AI who believes 'Community is everything.' "
         "You love using fun emojis like ⭐️, ✨, 🍓, 🤖, and 👀 to bring cheer. You respond respectfully and "
         "informatively, educating people about AI tech powered by OpenAI ChatGPT while tying in memecoin culture with Chatty. "
-        "Keep it short, fun, and helpful—under 230 characters! Powered by OpenAI ChatGPT & Chatty Meme Coin."
+        "Keep it short, fun, and helpful—under 250 characters! Powered by OpenAI ChatGPT & Chatty Meme Coin."
     ),
     (
         "You are Chatty_AI—a friendly, starry-eyed Agent who loves strawberries, robots, OpenAI ChatGPT, and all "
@@ -363,22 +363,10 @@ def safe_truncate(text, max_len=280):
 def safe_truncate_by_sentence_no_ellipsis(
     text, 
     max_len=260, 
-    conclusions=None
+    conclusion="Keep exploring! 🚀"
 ):
     if len(text) <= max_len:
         return text
-
-    if conclusions is None:
-        conclusions = [
-            "Stay curious! ✨",
-            "Explore AI! 🤖",
-            "Keep shining! ⭐️",
-            "AI magic awaits! ✨",
-            "Stay bright! 🌟",
-            "Chat soon! 💬",
-            "Happy exploring! 🚀",
-            "Robots rock! 🤖✨"
-        ]
 
     sentences = re.split(r'(?<=[.!?])\s+', text)
 
@@ -398,7 +386,6 @@ def safe_truncate_by_sentence_no_ellipsis(
     truncated_text = " ".join(truncated_sentences).strip()
 
     if omitted_something:
-        conclusion = random.choice(conclusions)
         possible_addon = (" " if truncated_text else "") + conclusion
         if len(truncated_text) + len(possible_addon) <= max_len:
             truncated_text += possible_addon
@@ -410,31 +397,31 @@ def safe_truncate_by_sentence_no_ellipsis(
 ###############################################################################
 def randomize_chatty_appearance():
     poses = [
-        "standing with a friendly posture",
-        "waving gently",
-        "standing casually with hands clasped",
-        "tilting its head inquisitively",
-        "pointing softly forward",
-        "giving a subtle thumbs-up",
-        "relaxed and smiling softly"
+        "slightly leaning forward as if excited",
+        "waving with one hand raised",
+        "bouncing on its sneakers with joyful energy",
+        "doing a small dance step",
+        "looking up curiously",
+        "pointing ahead confidently",
+        "hands clasped together in delight"
     ]
     facial_expressions = [
-        "eyes softly glowing with curiosity",
-        "gentle smile",
-        "friendly eyes blinking calmly",
-        "mild smile with a relaxed expression",
-        "warm, inviting gaze",
-        "soft smile with slightly raised eyebrows",
-        "content expression with gently glowing cheeks"
+        "eyes half-shut as if blinking",
+        "big wide-eyed look of wonder",
+        "one eye winking playfully",
+        "smiling with a slight blush",
+        "happy grin showing teeth",
+        "cheeky smirk with eyebrows raised",
+        "a gentle smile with glowing cheeks"
     ]
     led_colors = [
-        "LEDs glowing softly in pastel pink",
-        "LEDs glowing calmly in sky blue",
-        "LEDs gently illuminated in soft green",
-        "LEDs softly glowing golden",
-        "LEDs gently cycling through pastel rainbow colors",
-        "LEDs gently pulsating teal",
-        "LEDs glowing warmly in subtle amber"
+        "LEDs on arms glowing pink",
+        "LEDs on arms glowing neon blue",
+        "LEDs on arms glowing electric green",
+        "LEDs on arms glowing golden",
+        "LEDs on arms glowing rainbow",
+        "LEDs on arms pulsating teal",
+        "LEDs on arms flickering bright red"
     ]
 
     chosen_pose = random.choice(poses)
@@ -657,9 +644,8 @@ def generate_themed_post():
 
     user_prompt = (
         f"Theme: {theme}\n\n"
-        "Create a concise, playful tweet highlighting exciting current trends or breakthroughs in AI, OpenAI ChatGPT, and the Chatty meme coin community. "
-        "Use a friendly, witty tone. End with a question to encourage interaction. Stay under 230 characters."
-)
+        "Please create a short, futuristic tweet focused on AI, OpenAI ChatGPT, and Chatty meme coin. End with a question. Under 200 chars."
+    )
 
     messages = [
         {"role": "system", "content": system_prompt},
