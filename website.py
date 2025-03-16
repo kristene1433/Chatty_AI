@@ -2,8 +2,9 @@ from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS  # Import CORS for cross-origin requests
 import os
 import random
+# Replaced create_scene_content with generate_scene_from_theme
 from chatty_core import (
-    create_scene_content,
+    generate_scene_from_theme,
     create_simplified_image_prompt,
     generate_image,
     download_image,
@@ -26,19 +27,23 @@ def create_meme():
     if not scene:
         scene = "Chatty in an awesome scene"
     try:
-        # Build the detailed scene description for Chatty
-        scene_content = create_scene_content(scene)
+        # Build the scene description for Chatty (dynamic approach)
+        scene_content = generate_scene_from_theme(scene)
+
         # Create a simplified DALL·E prompt from the scene
         prompt = create_simplified_image_prompt(scene_content)
+
         # Generate the image URL using chatty_core
         generated_url = generate_image(prompt, max_length=MAX_PROMPT_LENGTH_TELEGRAM)
         if not generated_url:
             return jsonify({"error": "Image generation failed."}), 500
+
         # Download the image locally
         image_path = download_image(generated_url, prompt)
         if not image_path:
             return jsonify({"error": "Image download failed."}), 500
-        # Ensure the correct absolute path for serving the image
+
+        # Return the filename for the client to retrieve
         image_filename = os.path.basename(image_path)
         return jsonify({"image_url": f"/meme_image/{image_filename}"})
     except Exception as e:
