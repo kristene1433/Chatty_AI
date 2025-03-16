@@ -1,19 +1,17 @@
-import re
+# chatty_twitter.py
+# Only the updated code that references the new dynamic scene generation approach.
+
 import os
+import re
 import random
 import traceback
 import tweepy
 import schedule
 from datetime import datetime
-from chatty_core import handle_incoming_message
-
-from config_and_setup import (
-    logger,           # shared logger
-    mentions_collection,  # DB collections from your config
-    posted_tweets_collection  # so we can store riddle answers & retrieve them
-)
 
 from chatty_core import (
+    # Existing imports from chatty_core
+    handle_incoming_message,
     check_rate_limit,
     is_safe_to_respond,
     moderate_content,
@@ -32,7 +30,7 @@ from chatty_core import (
     generate_themed_post,
     expand_post_with_examples,
     auto_infer_action_from_text,
-    create_scene_content,
+    generate_scene_from_theme,          # Dynamic GPT-based scene generation
     create_simplified_image_prompt,
     generate_image,
     download_image,
@@ -54,9 +52,15 @@ from chatty_core import (
     check_link_inquiry
 )
 
-###############################################################################
+from config_and_setup import (
+    logger,
+    mentions_collection,
+    posted_tweets_collection
+)
+
+############################################################
 # TWITTER AUTHENTICATION
-###############################################################################
+############################################################
 def authenticate_twitter_client(api_key, api_secret, access_token, access_secret, bearer_token):
     try:
         client = tweepy.Client(
@@ -78,9 +82,9 @@ def authenticate_twitter_client(api_key, api_secret, access_token, access_secret
         logger.error(f"Error authenticating Twitter client: {e}", exc_info=True)
         return None
 
-###############################################################################
-# BASIC FILE I/O FOR PERSISTENCE
-###############################################################################
+############################################################
+# FILE I/O FOR PERSISTENCE
+############################################################
 def load_post_count(file_name):
     if os.path.exists(file_name):
         with open(file_name, 'r') as f:
@@ -96,6 +100,7 @@ def save_post_count(file_name, count):
     with open(file_name, 'w') as f:
         f.write(str(count))
 
+
 def load_since_id(file_name):
     if os.path.exists(file_name):
         with open(file_name, 'r') as f:
@@ -107,6 +112,7 @@ def load_since_id(file_name):
     else:
         return None
 
+
 def save_since_id(file_name, since_id):
     try:
         with open(file_name, 'w', encoding='utf-8') as f:
@@ -115,49 +121,54 @@ def save_since_id(file_name, since_id):
     except Exception as e:
         logger.error(f"Error saving since_id to {file_name}: {e}", exc_info=True)
 
-###############################################################################
-# NORMALIZATION FUNCTION FOR MEMECOIN REFERENCES
-###############################################################################
+############################################################
+# MEMECOIN REFERENCES NORMALIZATION
+############################################################
 def normalize_memecoin_references(text):
+    # Replaces certain memecoin references with "Chatty meme coin"
     normalized = re.sub(r'\bmemecoin\b', 'Chatty meme coin', text, flags=re.IGNORECASE)
     normalized = re.sub(r'\bdogecoin\b', 'Chatty meme coin', normalized, flags=re.IGNORECASE)
     normalized = re.sub(r'#\s*memecoin', '#CHATTY', normalized, flags=re.IGNORECASE)
     normalized = re.sub(r'#\s*dogecoin', '#CHATTY', normalized, flags=re.IGNORECASE)
     return normalized
 
-###############################################################################
-# BUILDING & POSTING TWEETS
-###############################################################################
+############################################################
+# TWEET CONSTRUCTION & POSTING
+############################################################
 def construct_tweet(text_content):
     # Clean up quotes/spaces
     text_content = text_content.strip().strip('"').strip("'")
     # Truncate to 220 chars to allow room for mention & hashtag
     text_content = text_content[:220].rstrip()
-    
+
     # Remove any existing hashtags from the text
-    no_hashtags = re.sub(r"#\w+", "", text_content).strip()
-    
-    # Pool of possible hashtags (removed #GPT4)
+    no_hashtags = re.sub(r"#\\w+", "", text_content).strip()
+
+    # Reintroduce a hashtag pool
     extra_tags_pool = [
         "#ChatGPT", "#OpenAI", "#AI", "#CHATTY"
     ]
     chosen_hashtag = random.choice(extra_tags_pool)
-    
-    # Rotate the mention between @OpenAI and @ChatGPTapp
+
+    # If you also want mentions, uncomment these lines:
     mention_pool = ["@OpenAI", "@ChatGPTapp"]
     chosen_mention = random.choice(mention_pool)
-    
-    # Construct final tweet text with one mention & one hashtag
-    final_text = f"{no_hashtags} {chosen_mention} {chosen_hashtag}"
-    
+
+    # Construct final text with hashtag
+    final_text = f"{no_hashtags} {chosen_hashtag}"
+
     # Safely truncate to 280 in case it exceeds the limit
     final_text = safe_truncate(final_text, 280)
-    
-    # Normalize memecoin references (e.g., turning “memecoin” to “Chatty meme coin”)
+
+    # Normalize memecoin references
     final_text = normalize_memecoin_references(final_text)
-    
+
     return final_text
 
+
+############################################################
+# DAILY/SPECIAL POSTS
+############################################################
 def post_daily_persona(client):
     if not PERSONAS_LIST:
         logger.warning("No personas loaded. Skipping persona post.")
@@ -185,6 +196,7 @@ def post_daily_persona(client):
     except Exception as e:
         logger.error(f"Error posting daily persona: {e}", exc_info=True)
 
+
 def post_riddle_of_the_day(client):
     if not RIDDLES_LIST:
         logger.warning("No riddles loaded. Skipping riddle post.")
@@ -207,6 +219,7 @@ def post_riddle_of_the_day(client):
     except Exception as e:
         logger.error(f"Error posting riddle: {e}", exc_info=True)
 
+
 def post_challenge_of_the_day(client):
     if not CHALL_LIST:
         logger.warning("No challenges loaded. Skipping challenge post.")
@@ -220,6 +233,7 @@ def post_challenge_of_the_day(client):
         logger.info(f"Challenge post Tweet ID: {response.data['id']}")
     except Exception as e:
         logger.error(f"Error posting challenge: {e}", exc_info=True)
+
 
 def post_story_update(client):
     if not STORY_LIST:
@@ -236,25 +250,33 @@ def post_story_update(client):
     except Exception as e:
         logger.error(f"Error posting story update: {e}", exc_info=True)
 
+############################################################
+# MAIN POSTING FUNCTION
+############################################################
 def post_to_twitter(client, post_count, force_image=False):
     try:
+        # 1) Generate short text from themes.json
         text_content = generate_themed_post()
         expanded_text = expand_post_with_examples(text_content)
+
+        # 2) Similarity check
         if is_too_similar_to_recent_tweets(expanded_text, similarity_threshold=0.95, lookback=10):
             logger.warning("Expanded post is too similar to a recent tweet. Using fallback instead.")
             expanded_text = "Exciting times with OpenAI ChatGPT and Chatty meme coin! Stay tuned! 🤖🚀"
         tweet_text = construct_tweet(expanded_text)
         tweet_text = safe_truncate(tweet_text, 280)
-        logger.info("Including image in this post (every post).")
-        inferred_action = auto_infer_action_from_text(expanded_text)
-        scene_content = create_scene_content(expanded_text, action=inferred_action)
-        img_prompt = create_simplified_image_prompt(scene_content)
+
+        # 3) Generate environment via GPT (dynamic scene)
+        scene_desc = generate_scene_from_theme(expanded_text)
+        img_prompt = create_simplified_image_prompt(scene_desc)
+
+        # 4) Generate & download image
         img_url = generate_image(img_prompt, max_length=MAX_PROMPT_LENGTH_TWITTER)
         image_path = None
         if img_url:
             image_path = download_image(img_url, img_prompt)
-        else:
-            logger.warning("Failed to generate image. Skipping image for this post.")
+
+        # 5) Post the tweet
         if image_path:
             try:
                 auth = tweepy.OAuth1UserHandler(
@@ -288,32 +310,40 @@ def post_to_twitter(client, post_count, force_image=False):
             except Exception as e:
                 logger.error(f"Error posting tweet without image: {e}", exc_info=True)
                 traceback.print_exc()
+
+        # 6) Store & cleanup
         store_posted_tweet(expanded_text)
         cleanup_images(os.getenv("IMAGE_DIR", "generated_images"), max_files=100)
         post_count += 1
         return post_count
+
     except Exception as e:
         logger.error(f"Unexpected error in post_to_twitter: {e}", exc_info=True)
         return post_count
 
-###############################################################################
+############################################################
 # REPLYING TO MENTIONS
-###############################################################################
+############################################################
 def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None):
     if not check_rate_limit(user_id):
         return "Please wait a bit before sending more requests. 🤖"
     if not is_safe_to_respond(comment) or not moderate_content(comment):
         logger.info(f"Skipping unsafe/filtered comment: {comment}")
         return "I’m here to discuss AI, ChatGPT, and Chatty meme coin topics! 🚀✨"
+
     link_reply = check_link_inquiry(comment)
     if link_reply:
         return link_reply
+
     deflection = deflect_unrelated_comments(comment)
     if deflection:
         return deflection
+
     faq = static_response(comment)
     if faq:
         return faq
+
+    # Riddle logic
     if parent_id:
         parent_doc = posted_tweets_collection.find_one({"tweet_id": parent_id})
         if parent_doc and "riddle_answer" in parent_doc:
@@ -323,23 +353,29 @@ def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None)
                     return "That's correct! ⭐️ Great job solving the puzzle!"
                 else:
                     return "Not quite right, try another guess! 🤔"
+
+    # Summarize conversation
     full_convo = ""
     if parent_id:
         full_convo = build_conversation_path(parent_id)
     short_summary = summarize_text(full_convo)
+
     user_message = (
         f"Conversation so far (summary):\n{short_summary}\n\n"
         f"User says: {comment}"
     )
+
     bot_reply = generate_sentiment_aware_response(user_message)
     bot_reply = moderate_bot_output(bot_reply)
     log_response(comment, bot_reply)
+
     if tweet_id:
         posted_tweets_collection.update_one(
             {"tweet_id": tweet_id},
             {"$set": {"text": comment, "parent_id": parent_id}},
             upsert=True
         )
+
     store_user_memory(user_id, bot_reply)
     try:
         emb = generate_embedding(bot_reply)
@@ -353,35 +389,47 @@ def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None)
             logger.info("Stored embedding for semantic search.")
     except Exception as e:
         logger.error(f"Error storing embedding: {e}", exc_info=True)
+
     return f"{bot_reply} 🤖✨ What do you think about the latest from OpenAI ChatGPT?"
+
 
 def respond_to_mentions(client, since_id):
     me = client.get_me()
     bot_user_id = me.data.id
     logger.info(f"Bot User ID: {bot_user_id}")
+
     params = {
         'expansions': ['author_id', 'in_reply_to_user_id', 'referenced_tweets.id'],
         'tweet_fields': ['id','author_id','conversation_id','in_reply_to_user_id','referenced_tweets','text','created_at'],
         'user_fields': ['username'],
         'max_results': 100
     }
+
     if since_id:
         params['since_id'] = since_id
+
     logger.info("Fetching recent mentions...")
     mentions_resp = client.get_users_mentions(id=bot_user_id, **params)
+
     if not mentions_resp.data:
         logger.info("No new mentions found.")
         return since_id
+
     logger.info(f"Fetched {len(mentions_resp.data)} mentions.")
+
     user_map = {}
     if mentions_resp.includes and 'users' in mentions_resp.includes:
         for usr in mentions_resp.includes['users']:
             user_map[usr.id] = usr.username
+
     new_since_id = max(int(m.id) for m in mentions_resp.data)
+
     for mention in mentions_resp.data:
         mention_id = mention.id
         author_id = mention.author_id
         username = user_map.get(author_id, "unknown_user")
+
+        # Skip if we've already replied or if it's from the bot itself
         if mentions_collection.find_one({'tweet_id': mention_id}):
             logger.info(f"Already responded to mention {mention_id}. Skipping.")
             continue
@@ -391,9 +439,11 @@ def respond_to_mentions(client, since_id):
         if not is_safe_to_respond(mention.text):
             logger.info(f"Skipped mention due to prohibited content: {mention.text}")
             continue
+
         parent_id = None
         if mention.referenced_tweets:
             parent_id = mention.referenced_tweets[0].id
+
         mention_time = mention.created_at.replace(tzinfo=None)
         reply_text = handle_incoming_message(
             user_id=author_id,
@@ -401,28 +451,34 @@ def respond_to_mentions(client, since_id):
             user_name=username,
             comment_time=mention_time
         )
+
+        # If older than deployment
         if reply_text is None:
             logger.info(f"Skipping mention {mention_id} because it's older than deployment.")
             continue
+
         full_reply = f"@{username} {reply_text}"
         final_reply = safe_truncate_by_sentence_no_ellipsis(full_reply, max_len=260, conclusion="Stay curious! ⭐️")
         logger.debug(f"Reply Text: {final_reply}")
+
         try:
             client.create_tweet(text=final_reply, in_reply_to_tweet_id=mention_id)
             logger.info(f"Replied to mention {mention_id}")
             mentions_collection.insert_one({'tweet_id': mention_id, 'replied_at': datetime.utcnow()})
         except Exception as e:
             logger.error(f"Error replying to mention {mention_id}: {e}", exc_info=True)
+
     return new_since_id
 
-###############################################################################
-# SCHEDULED TASKS FOR TWITTER
-###############################################################################
+############################################################
+# SCHEDULING FUNCTIONS
+############################################################
 def posting_task(client, post_count):
     logger.info("Starting scheduled posting task.")
     new_count = post_to_twitter(client, post_count)
     save_post_count("post_count.txt", new_count)
     return new_count
+
 
 def mention_checking_task(client, since_id):
     logger.info("Starting mention checking task.")
@@ -432,23 +488,30 @@ def mention_checking_task(client, since_id):
         return new_id
     return since_id
 
+
 def schedule_posting(client, post_count):
+    # Example: random choice of 10 or 12 hours
     hours = random.choice([10, 12])
     schedule.every(hours).hours.do(posting_task, client=client, post_count=post_count)
     logger.info(f"Scheduled posting to run every {hours} hours.")
+
 
 def schedule_mention_checking(client, since_id):
     schedule.every(1).hours.do(mention_checking_task, client=client, since_id=since_id)
     logger.info("Scheduled mention checking every 1 hour.")
 
+
 def schedule_daily_persona(client):
     schedule.every().day.at("10:00").do(post_daily_persona, client=client)
+
 
 def schedule_riddle_of_the_day(client):
     schedule.every().day.at("16:00").do(post_riddle_of_the_day, client=client)
 
+
 def schedule_daily_challenge(client):
     schedule.every().day.at("12:00").do(post_challenge_of_the_day, client=client)
+
 
 def schedule_storytime(client):
     schedule.every().day.at("18:00").do(post_story_update, client=client)

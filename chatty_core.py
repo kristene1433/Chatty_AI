@@ -1,3 +1,8 @@
+
+
+################################################################################
+# chatty_core.py
+################################################################################
 import os
 import glob
 import json
@@ -118,6 +123,7 @@ SYSTEM_PROMPTS = [
 
 def select_system_prompt():
     return random.choice(SYSTEM_PROMPTS)
+
 
 def load_json_data_from_folder(folder_path):
     data_list = []
@@ -361,8 +367,8 @@ def safe_truncate(text, max_len=280):
     return text[: (max_len - 3)].rstrip() + "..."
 
 def safe_truncate_by_sentence_no_ellipsis(
-    text, 
-    max_len=260, 
+    text,
+    max_len=260,
     conclusion="Keep exploring! 🚀"
 ):
     if len(text) <= max_len:
@@ -393,43 +399,8 @@ def safe_truncate_by_sentence_no_ellipsis(
     return truncated_text
 
 ###############################################################################
-# VARIOUS PROMPT/IMAGE-BUILDING FUNCTIONS
+# STORED CHATTY CONFIG
 ###############################################################################
-def randomize_chatty_appearance():
-    poses = [
-        "slightly leaning forward as if excited",
-        "waving with one hand raised",
-        "bouncing on its sneakers with joyful energy",
-        "doing a small dance step",
-        "looking up curiously",
-        "pointing ahead confidently",
-        "hands clasped together in delight"
-    ]
-    facial_expressions = [
-        "eyes half-shut as if blinking",
-        "big wide-eyed look of wonder",
-        "one eye winking playfully",
-        "smiling with a slight blush",
-        "happy grin showing teeth",
-        "cheeky smirk with eyebrows raised",
-        "a gentle smile with glowing cheeks"
-    ]
-    led_colors = [
-        "LEDs on arms glowing pink",
-        "LEDs on arms glowing neon blue",
-        "LEDs on arms glowing electric green",
-        "LEDs on arms glowing golden",
-        "LEDs on arms glowing rainbow",
-        "LEDs on arms pulsating teal",
-        "LEDs on arms flickering bright red"
-    ]
-
-    chosen_pose = random.choice(poses)
-    chosen_face = random.choice(facial_expressions)
-    chosen_led = random.choice(led_colors)
-
-    return f"{chosen_pose}, {chosen_face}, {chosen_led}"
-
 def get_chatty_config(name):
     try:
         doc = chatty_collection.find_one({"name": name})
@@ -451,6 +422,7 @@ def store_chatty_config(name, instructions):
     except Exception as e:
         logger.error(f"Error storing Chatty instructions: {e}", exc_info=True)
 
+# Example Chatty persona text
 chatty_persona_text = """
 Chatty: A Nostalgic Yet Modern Pixel-Art Companion
 
@@ -479,8 +451,60 @@ Chatty: A Nostalgic Yet Modern Pixel-Art Companion
     - Bright, celebratory pixel details (such as confetti or glowing accessories) can be introduced depending on the theme.
     - Whether in a bustling tech cityscape, a dreamy fantasy realm, or a playful arcade setting, Chatty’s design can be seamlessly integrated. Its versatile look ensures it remains a captivating guide, helper, or companion in any envisioned scene.
 """
+
+# Store the base instructions
 store_chatty_config("BaseChatty", chatty_persona_text)
 
+###############################################################################
+# RICHER SCENE GENERATION (DYNAMIC) - OPTION 2
+###############################################################################
+def generate_scene_from_theme(theme):
+    """
+    Dynamically generates a vivid pixel-art environment for Chatty
+    based on the given theme, using GPT calls. This approach covers
+    ANY theme from your themes.json without needing a manual dictionary.
+    """
+    prompt = (
+        f"Describe a vivid, playful, pixel-art style environment for Chatty, a cheerful retro CRT monitor character.\n"
+        f"The scene should visually represent the concept '{theme}'. "
+        f"Include bright colors, futuristic or crypto-themed elements, and interactive details, "
+        "avoiding any mention of juggling or tossing items. Keep it 1 or 2 sentences."
+    )
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a creative AI specialized in generating short, imaginative pixel-art scene descriptions. "
+                "Return exactly 1-2 sentences describing the environment."
+            )
+        },
+        {"role": "user", "content": prompt}
+    ]
+
+    response = robust_chat_completion(
+        messages,
+        model=ADVANCED_MODEL,
+        max_tokens=150,
+        temperature=0.7
+    )
+
+    # Fallback in case GPT call fails
+    default_scene = (
+        "Chatty explores a vibrant futuristic pixel-art cityscape filled with neon lights, "
+        "interactive holograms, and cheerful robotic companions."
+    )
+
+    if response and response.choices:
+        generated_scene = response.choices[0].message.content.strip()
+        # Make sure we have something!
+        if generated_scene:
+            return generated_scene
+    return default_scene
+
+###############################################################################
+# CREATE SIMPLIFIED IMAGE PROMPT (no dictionary references)
+###############################################################################
 def create_simplified_image_prompt(text_content):
     try:
         chatty_instructions = get_chatty_config("BaseChatty")
@@ -488,23 +512,24 @@ def create_simplified_image_prompt(text_content):
             "You are a creative AI that outputs a concise DALL·E prompt. "
             "Always describe Chatty in pixel-art, retro-futuristic style with bright, vibrant lighting. "
             "The aspect ratio is ideally 3:4 or 4:5, focusing on the full character. "
-            "No text, logos, or letters in the scene. Incorporate dynamic action or environmental detail. "
-            "Keep consistency with Chatty’s arms, gloves, sneakers, and screen face, and include hints of OpenAI ChatGPT style."
+            "No text, logos, or letters in the scene. Do not depict juggling or tossing items. "
+            "Keep consistency with Chatty’s arms, gloves, sneakers, and screen face."
         )
 
-        if "action" not in text_content.lower() and "environment" not in text_content.lower():
-            text_content += " Also show Chatty doing something dynamic or playful."
+        if "environment" not in text_content.lower():
+            text_content += " Depict Chatty standing cheerfully in a detailed pixel-art environment with vibrant scenery and bright lighting."
 
         user_request = (
             f"Scene Concept: {text_content}\n\n"
             f"Chatty instructions: {chatty_instructions}\n\n"
-            "Give 1–2 sentences, focusing on pixel details, playful energy, bright lighting, and no text."
+            "Give 1–2 sentences, focusing on pixel details, bright vibrant lighting, static pose, no juggling, and no text."
         )
 
         messages = [
             {"role": "system", "content": system_instruction},
             {"role": "user", "content": user_request}
         ]
+
         response = robust_chat_completion(
             messages,
             model=ADVANCED_MODEL,
@@ -522,14 +547,17 @@ def create_simplified_image_prompt(text_content):
             logger.info(f"Simplified Chatty Prompt Created: {prompt_result}")
             return prompt_result
         else:
-            return "Depict Chatty (retro CRT, pixel-art, bright lighting) doing something playful, no text."
+            return "Depict Chatty (retro CRT, pixel-art, bright lighting) cheerfully standing in a detailed futuristic scene, no juggling, no text."
     except openai.error.OpenAIError as e:
         logger.error(f"OpenAI Error creating simplified image prompt: {e}", exc_info=True)
         return "Depict Chatty (retro CRT, pixel-art, bright lighting) doing something playful, no text."
     except Exception as e:
         logger.error(f"Unexpected error creating simplified image prompt: {e}", exc_info=True)
-        return "Depict Chatty (retro CRT, pixel-art, bright lighting) doing something playful, no text."
+        return "Depict Chatty (retro CRT, pixel-art, bright lighting) cheerfully standing in a detailed futuristic scene, no text."
 
+###############################################################################
+# IMAGE GENERATION & DOWNLOAD
+###############################################################################
 def generate_image(prompt, max_length=MAX_PROMPT_LENGTH_TELEGRAM):
     try:
         if len(prompt) > max_length:
@@ -632,10 +660,9 @@ def log_response(comment, response):
 ###############################################################################
 def generate_themed_post():
     """
-    Creates a short, enthusiastic social post about OpenAI, ChatGPT, and Chatty meme coin.
+    Creates a short, enthusiastic social post about OpenAI, ChatGPT, and the Chatty meme coin.
     Ends with a question and is under ~200 chars.
     """
-    # Ensure themes_list uses the updated theme file focused on OpenAI/ChatGPT/Chatty.
     theme = random.choice(themes_list)
     system_prompt = (
         "You are a social media copywriter who creates short, vivid posts focused on OpenAI ChatGPT and the Chatty meme coin. "
@@ -644,19 +671,28 @@ def generate_themed_post():
 
     user_prompt = (
         f"Theme: {theme}\n\n"
-        "Please create a short, futuristic tweet focused on AI, OpenAI ChatGPT, and Chatty meme coin. End with a question. Under 200 chars."
+        "Please create a short tweet focused on AI, OpenAI ChatGPT, and Chatty meme coin. "
+        "End with a question. Keep it under 200 chars, and do not reference future years (like 2030 or 2050)."
     )
 
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt}
     ]
-    resp = robust_chat_completion(messages, model=ADVANCED_MODEL, max_tokens=220, temperature=0.8, presence_penalty=1.0, frequency_penalty=0.5)
-    if resp:
+    resp = robust_chat_completion(
+        messages,
+        model=ADVANCED_MODEL,
+        max_tokens=220,
+        temperature=0.8,
+        presence_penalty=1.0,
+        frequency_penalty=0.5
+    )
+    if resp and resp.choices:
         raw_text = resp.choices[0].message.content.strip()
         return raw_text.strip('"').strip("'")
     else:
-        return "OpenAI ChatGPT is evolving fast—what's your favorite breakthrough? 🤖✨ #OpenAI #ChatGPT"
+        return "OpenAI ChatGPT is evolving quickly—what's your favorite breakthrough today? 🤖✨"
+
 
 def auto_infer_action_from_text(post_text):
     system_prompt = (
@@ -681,17 +717,6 @@ def auto_infer_action_from_text(post_text):
     else:
         return "performing a futuristic task"
 
-def create_scene_content(theme, action=None):
-    base_scene = (
-        f"Chatty, a retro CRT monitor with a bright-blue screen face, is in a futuristic environment about {theme}. "
-        "No text or letters anywhere."
-    )
-    random_appearance = randomize_chatty_appearance()
-    if action and "futuristic task" not in action.lower():
-        base_scene += f" Chatty is {action}. Additionally, Chatty is {random_appearance}."
-    else:
-        base_scene += f" Chatty is {random_appearance}."
-    return base_scene
 
 def expand_post_with_examples(original_text):
     system_prompt = (
@@ -924,3 +949,4 @@ def handle_incoming_message(user_id, user_text, user_name=None, comment_time=Non
 
     final_text = ensure_positive_tone(response.choices[0].message.content.strip())
     return final_text
+
