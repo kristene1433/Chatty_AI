@@ -1,5 +1,4 @@
 # chatty_twitter.py
-# Only the updated code that references the new dynamic scene generation approach.
 
 import os
 import re
