@@ -9,7 +9,6 @@ import schedule
 from datetime import datetime
 
 from chatty_core import (
-    # Existing imports from chatty_core
     handle_incoming_message,
     check_rate_limit,
     is_safe_to_respond,
@@ -148,10 +147,6 @@ def construct_tweet(text_content):
         "#ChatGPT", "#OpenAI", "#AI", "#CHATTY"
     ]
     chosen_hashtag = random.choice(extra_tags_pool)
-
-    # If you also want mentions, uncomment these lines:
-    mention_pool = ["@OpenAI", "@ChatGPTapp"]
-    chosen_mention = random.choice(mention_pool)
 
     # Construct final text with hashtag
     final_text = f"{no_hashtags} {chosen_hashtag}"
@@ -488,29 +483,25 @@ def mention_checking_task(client, since_id):
     return since_id
 
 
-def schedule_posting(client, post_count):
+#def schedule_posting(client, post_count):
     # Example: random choice of 10 or 12 hours
-    hours = random.choice([10, 12])
-    schedule.every(hours).hours.do(posting_task, client=client, post_count=post_count)
-    logger.info(f"Scheduled posting to run every {hours} hours.")
+#    hours = random.choice([10, 12])
+#    schedule.every(hours).hours.do(posting_task, client=client, post_count=post_count)
+#    logger.info(f"Scheduled posting to run every {hours} hours.")
 
 
-def schedule_mention_checking(client, since_id):
-    schedule.every(1).hours.do(mention_checking_task, client=client, since_id=since_id)
-    logger.info("Scheduled mention checking every 1 hour.")
+#def schedule_mention_checking(client, since_id):
+#    schedule.every(1).hours.do(mention_checking_task, client=client, since_id=since_id)
+#    logger.info("Scheduled mention checking every 1 hour.")
 
 
-def schedule_daily_persona(client):
-    schedule.every().day.at("10:00").do(post_daily_persona, client=client)
+#def schedule_daily_persona(client):
+#    schedule.every().day.at("10:00").do(post_daily_persona, client=client)
 
 
-def schedule_riddle_of_the_day(client):
-    schedule.every().day.at("16:00").do(post_riddle_of_the_day, client=client)
+#def schedule_riddle_of_the_day(client):
+#   schedule.every().day.at("16:00").do(post_riddle_of_the_day, client=client)
 
 
-def schedule_daily_challenge(client):
-    schedule.every().day.at("12:00").do(post_challenge_of_the_day, client=client)
-
-
-def schedule_storytime(client):
-    schedule.every().day.at("18:00").do(post_story_update, client=client)
+#def schedule_daily_challenge(client):
+#    schedule
