@@ -483,11 +483,11 @@ def mention_checking_task(client, since_id):
     return since_id
 
 
-#def schedule_posting(client, post_count):
+def schedule_posting(client, post_count):
     # Example: random choice of 10 or 12 hours
-#    hours = random.choice([10, 12])
-#    schedule.every(hours).hours.do(posting_task, client=client, post_count=post_count)
-#    logger.info(f"Scheduled posting to run every {hours} hours.")
+    hours = random.choice([10, 12])
+    schedule.every(hours).hours.do(posting_task, client=client, post_count=post_count)
+    logger.info(f"Scheduled posting to run every {hours} hours.")
 
 
 #def schedule_mention_checking(client, since_id):
