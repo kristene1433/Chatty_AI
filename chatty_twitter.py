@@ -9,7 +9,7 @@ import schedule
 from datetime import datetime
 
 from chatty_core import (
-    handle_incoming_message,
+    #handle_incoming_message,
     check_rate_limit,
     is_safe_to_respond,
     moderate_content,
@@ -318,151 +318,151 @@ def post_to_twitter(client, post_count, force_image=False):
 ############################################################
 # REPLYING TO MENTIONS
 ############################################################
-def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None):
-    if not check_rate_limit(user_id):
-        return "Please wait a bit before sending more requests. 🤖"
-    if not is_safe_to_respond(comment) or not moderate_content(comment):
-        logger.info(f"Skipping unsafe/filtered comment: {comment}")
-        return "I’m here to discuss AI, ChatGPT, and Chatty meme coin topics! 🚀✨"
+#def handle_comment_with_context(user_id, comment, tweet_id=None, parent_id=None):
+#   if not check_rate_limit(user_id):
+#        return "Please wait a bit before sending more requests. 🤖"
+#    if not is_safe_to_respond(comment) or not moderate_content(comment):
+#        logger.info(f"Skipping unsafe/filtered comment: {comment}")
+#        return "I’m here to discuss AI, ChatGPT, and Chatty meme coin topics! 🚀✨"
 
-    link_reply = check_link_inquiry(comment)
-    if link_reply:
-        return link_reply
+#    link_reply = check_link_inquiry(comment)
+#    if link_reply:
+#        return link_reply
 
-    deflection = deflect_unrelated_comments(comment)
-    if deflection:
-        return deflection
+#    deflection = deflect_unrelated_comments(comment)
+#    if deflection:
+#        return deflection
 
-    faq = static_response(comment)
-    if faq:
-        return faq
+#    faq = static_response(comment)
+#    if faq:
+#        return faq
 
     # Riddle logic
-    if parent_id:
-        parent_doc = posted_tweets_collection.find_one({"tweet_id": parent_id})
-        if parent_doc and "riddle_answer" in parent_doc:
-            correct_answer = parent_doc["riddle_answer"]
-            if correct_answer:
-                if is_guess_correct(comment, correct_answer, threshold=80):
-                    return "That's correct! ⭐️ Great job solving the puzzle!"
-                else:
-                    return "Not quite right, try another guess! 🤔"
+#    if parent_id:
+#        parent_doc = posted_tweets_collection.find_one({"tweet_id": parent_id})
+#        if parent_doc and "riddle_answer" in parent_doc:
+#            correct_answer = parent_doc["riddle_answer"]
+#            if correct_answer:
+#                if is_guess_correct(comment, correct_answer, threshold=80):
+#                    return "That's correct! ⭐️ Great job solving the puzzle!"
+#                else:
+#                    return "Not quite right, try another guess! 🤔"
 
     # Summarize conversation
-    full_convo = ""
-    if parent_id:
-        full_convo = build_conversation_path(parent_id)
-    short_summary = summarize_text(full_convo)
+#    full_convo = ""
+#    if parent_id:
+#        full_convo = build_conversation_path(parent_id)
+#    short_summary = summarize_text(full_convo)
 
-    user_message = (
-        f"Conversation so far (summary):\n{short_summary}\n\n"
-        f"User says: {comment}"
-    )
+#    user_message = (
+#        f"Conversation so far (summary):\n{short_summary}\n\n"
+#        f"User says: {comment}"
+#    )
 
-    bot_reply = generate_sentiment_aware_response(user_message)
-    bot_reply = moderate_bot_output(bot_reply)
-    log_response(comment, bot_reply)
+#    bot_reply = generate_sentiment_aware_response(user_message)
+#    bot_reply = moderate_bot_output(bot_reply)
+#    log_response(comment, bot_reply)
 
-    if tweet_id:
-        posted_tweets_collection.update_one(
-            {"tweet_id": tweet_id},
-            {"$set": {"text": comment, "parent_id": parent_id}},
-            upsert=True
-        )
+#    if tweet_id:
+#        posted_tweets_collection.update_one(
+#            {"tweet_id": tweet_id},
+#            {"$set": {"text": comment, "parent_id": parent_id}},
+#            upsert=True
+#        )
 
-    store_user_memory(user_id, bot_reply)
-    try:
-        emb = generate_embedding(bot_reply)
-        if emb:
-            from config_and_setup import embeddings_collection
-            embeddings_collection.insert_one({
-                "conversation_context": bot_reply,
-                "embedding": emb,
-                "timestamp": datetime.utcnow()
-            })
-            logger.info("Stored embedding for semantic search.")
-    except Exception as e:
-        logger.error(f"Error storing embedding: {e}", exc_info=True)
+#    store_user_memory(user_id, bot_reply)
+#    try:
+#        emb = generate_embedding(bot_reply)
+#        if emb:
+#            from config_and_setup import embeddings_collection
+#            embeddings_collection.insert_one({
+#                "conversation_context": bot_reply,
+#                "embedding": emb,
+#                "timestamp": datetime.utcnow()
+#            })
+#            logger.info("Stored embedding for semantic search.")
+#    except Exception as e:
+#        logger.error(f"Error storing embedding: {e}", exc_info=True)
 
-    return f"{bot_reply} 🤖✨ What do you think about the latest from OpenAI ChatGPT?"
+#    return f"{bot_reply} 🤖✨ What do you think about the latest from OpenAI ChatGPT?"
 
 
-def respond_to_mentions(client, since_id):
-    me = client.get_me()
-    bot_user_id = me.data.id
-    logger.info(f"Bot User ID: {bot_user_id}")
+#def respond_to_mentions(client, since_id):
+#    me = client.get_me()
+#    bot_user_id = me.data.id
+#    logger.info(f"Bot User ID: {bot_user_id}")
 
-    params = {
-        'expansions': ['author_id', 'in_reply_to_user_id', 'referenced_tweets.id'],
-        'tweet_fields': ['id','author_id','conversation_id','in_reply_to_user_id','referenced_tweets','text','created_at'],
-        'user_fields': ['username'],
-        'max_results': 100
-    }
+#    params = {
+#        'expansions': ['author_id', 'in_reply_to_user_id', 'referenced_tweets.id'],
+#        'tweet_fields': ['id','author_id','conversation_id','in_reply_to_user_id','referenced_tweets','text','created_at'],
+#        'user_fields': ['username'],
+#        'max_results': 100
+#    }
 
-    if since_id:
-        params['since_id'] = since_id
+#    if since_id:
+#        params['since_id'] = since_id
 
-    logger.info("Fetching recent mentions...")
-    mentions_resp = client.get_users_mentions(id=bot_user_id, **params)
+#    logger.info("Fetching recent mentions...")
+#    mentions_resp = client.get_users_mentions(id=bot_user_id, **params)
 
-    if not mentions_resp.data:
-        logger.info("No new mentions found.")
-        return since_id
+#    if not mentions_resp.data:
+#        logger.info("No new mentions found.")
+#        return since_id
 
-    logger.info(f"Fetched {len(mentions_resp.data)} mentions.")
+#    logger.info(f"Fetched {len(mentions_resp.data)} mentions.")
 
-    user_map = {}
-    if mentions_resp.includes and 'users' in mentions_resp.includes:
-        for usr in mentions_resp.includes['users']:
-            user_map[usr.id] = usr.username
+#    user_map = {}
+#    if mentions_resp.includes and 'users' in mentions_resp.includes:
+#        for usr in mentions_resp.includes['users']:
+#            user_map[usr.id] = usr.username
 
-    new_since_id = max(int(m.id) for m in mentions_resp.data)
+#    new_since_id = max(int(m.id) for m in mentions_resp.data)
 
-    for mention in mentions_resp.data:
-        mention_id = mention.id
-        author_id = mention.author_id
-        username = user_map.get(author_id, "unknown_user")
+#    for mention in mentions_resp.data:
+#        mention_id = mention.id
+#        author_id = mention.author_id
+#        username = user_map.get(author_id, "unknown_user")
 
         # Skip if we've already replied or if it's from the bot itself
-        if mentions_collection.find_one({'tweet_id': mention_id}):
-            logger.info(f"Already responded to mention {mention_id}. Skipping.")
-            continue
-        if author_id == bot_user_id:
-            logger.info(f"Skipping mention {mention_id} from self.")
-            continue
-        if not is_safe_to_respond(mention.text):
-            logger.info(f"Skipped mention due to prohibited content: {mention.text}")
-            continue
+#        if mentions_collection.find_one({'tweet_id': mention_id}):
+#            logger.info(f"Already responded to mention {mention_id}. Skipping.")
+#            continue
+#        if author_id == bot_user_id:
+#            logger.info(f"Skipping mention {mention_id} from self.")
+#            continue
+#        if not is_safe_to_respond(mention.text):
+#            logger.info(f"Skipped mention due to prohibited content: {mention.text}")
+#            continue
 
-        parent_id = None
-        if mention.referenced_tweets:
-            parent_id = mention.referenced_tweets[0].id
+#        parent_id = None
+#        if mention.referenced_tweets:
+#            parent_id = mention.referenced_tweets[0].id
 
-        mention_time = mention.created_at.replace(tzinfo=None)
-        reply_text = handle_incoming_message(
-            user_id=author_id,
-            user_text=mention.text,
-            user_name=username,
-            comment_time=mention_time
-        )
+#        mention_time = mention.created_at.replace(tzinfo=None)
+#        reply_text = handle_incoming_message(
+#            user_id=author_id,
+#            user_text=mention.text,
+#            user_name=username,
+#            comment_time=mention_time
+#        )
 
         # If older than deployment
-        if reply_text is None:
-            logger.info(f"Skipping mention {mention_id} because it's older than deployment.")
-            continue
+#        if reply_text is None:
+#            logger.info(f"Skipping mention {mention_id} because it's older than deployment.")
+#            continue
 
-        full_reply = f"@{username} {reply_text}"
-        final_reply = safe_truncate_by_sentence_no_ellipsis(full_reply, max_len=260, conclusion="Stay curious! ⭐️")
-        logger.debug(f"Reply Text: {final_reply}")
+#        full_reply = f"@{username} {reply_text}"
+#        final_reply = safe_truncate_by_sentence_no_ellipsis(full_reply, max_len=260, conclusion="Stay curious! ⭐️")
+#        logger.debug(f"Reply Text: {final_reply}")
 
-        try:
-            client.create_tweet(text=final_reply, in_reply_to_tweet_id=mention_id)
-            logger.info(f"Replied to mention {mention_id}")
-            mentions_collection.insert_one({'tweet_id': mention_id, 'replied_at': datetime.utcnow()})
-        except Exception as e:
-            logger.error(f"Error replying to mention {mention_id}: {e}", exc_info=True)
+#        try:
+#            client.create_tweet(text=final_reply, in_reply_to_tweet_id=mention_id)
+#            logger.info(f"Replied to mention {mention_id}")
+#            mentions_collection.insert_one({'tweet_id': mention_id, 'replied_at': datetime.utcnow()})
+#        except Exception as e:
+#            logger.error(f"Error replying to mention {mention_id}: {e}", exc_info=True)
 
-    return new_since_id
+#    return new_since_id
 
 ############################################################
 # SCHEDULING FUNCTIONS
