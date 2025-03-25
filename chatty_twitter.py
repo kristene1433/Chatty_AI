@@ -474,13 +474,13 @@ def posting_task(client, post_count):
     return new_count
 
 
-def mention_checking_task(client, since_id):
-    logger.info("Starting mention checking task.")
-    new_id = respond_to_mentions(client, since_id)
-    if new_id != since_id:
-        save_since_id("since_id.txt", new_id)
-        return new_id
-    return since_id
+#def mention_checking_task(client, since_id):
+#    logger.info("Starting mention checking task.")
+#    new_id = respond_to_mentions(client, since_id)
+#    if new_id != since_id:
+#        save_since_id("since_id.txt", new_id)
+#        return new_id
+#    return since_id
 
 
 def schedule_posting(client, post_count):
