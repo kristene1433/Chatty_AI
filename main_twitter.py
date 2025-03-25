@@ -53,7 +53,7 @@ def main():
 
     # 4) Schedule tasks (random posting, mention checking, etc.)
     schedule_posting(client, post_count)
-    schedule_mention_checking(client, since_id)
+    #schedule_mention_checking(client, since_id)
     # schedule_daily_persona(client)
     # schedule_riddle_of_the_day(client)
     # schedule_daily_challenge(client)
