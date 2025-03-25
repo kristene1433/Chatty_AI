@@ -17,7 +17,7 @@ from chatty_twitter import (
     load_since_id,
     save_since_id,
     schedule_posting,
-    schedule_mention_checking,
+    # schedule_mention_checking,
     post_to_twitter
     # If you want daily persona/riddle/challenge/story:
     # schedule_daily_persona,
