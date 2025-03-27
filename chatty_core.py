@@ -509,12 +509,13 @@ def create_simplified_image_prompt(text_content):
     try:
         chatty_instructions = get_chatty_config("BaseChatty")
         system_instruction = (
-            "You are a creative AI that outputs a concise DALL·E prompt. "
-            "Always describe Chatty in pixel-art, retro-futuristic style with bright, vibrant lighting. "
-            "The aspect ratio is ideally 3:4 or 4:5, focusing on the full character. "
-            "No text, logos, or letters in the scene. Do not depict juggling or tossing items. "
-            "Keep consistency with Chatty’s arms, gloves, sneakers, and screen face."
-        )
+            "You are a creative AI that outputs a single vivid image prompt. "
+            "Depict Chatty — a cheerful, anthropomorphic retro CRT monitor character — in a hand-drawn, Studio Ghibli-like cartoon style. "
+            "The style should be nostalgic, soft-colored, slightly whimsical, and painterly. "
+            "Chatty has a glowing blue pixel smile, cream CRT casing, gloves, colorful sneakers, and a playful energy. "
+            "Avoid any text or logos. Describe the full scene in 1-2 rich sentences."
+)
+
 
         if "environment" not in text_content.lower():
             text_content += " Depict Chatty standing cheerfully in a detailed pixel-art environment with vibrant scenery and bright lighting."
@@ -547,13 +548,13 @@ def create_simplified_image_prompt(text_content):
             logger.info(f"Simplified Chatty Prompt Created: {prompt_result}")
             return prompt_result
         else:
-            return "Depict Chatty (retro CRT, pixel-art, bright lighting) cheerfully standing in a detailed futuristic scene, no juggling, no text."
+            return "Depict Chatty the retro AI character (vintage CRT, Ghibli-style, warm cartoon tones) cheerfully standing in a detailed futuristic scene, no juggling, no text."
     except openai.error.OpenAIError as e:
         logger.error(f"OpenAI Error creating simplified image prompt: {e}", exc_info=True)
-        return "Depict Chatty (retro CRT, pixel-art, bright lighting) doing something playful, no text."
+        return "Depict Chatty the retro AI character (vintage CRT, Ghibli-style, warm cartoon tones) doing something playful, no text."
     except Exception as e:
         logger.error(f"Unexpected error creating simplified image prompt: {e}", exc_info=True)
-        return "Depict Chatty (retro CRT, pixel-art, bright lighting) cheerfully standing in a detailed futuristic scene, no text."
+        return "Depict Chatty the retro AI character (vintage CRT, Ghibli-style, warm cartoon tones) cheerfully standing in a detailed futuristic scene, no text."
 
 ###############################################################################
 # IMAGE GENERATION & DOWNLOAD
