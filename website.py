@@ -28,10 +28,10 @@ def create_meme():
         scene = "Chatty in an awesome scene"
     try:
         # Build the scene description for Chatty (dynamic approach)
-        scene_content = generate_scene_from_theme(scene)
+        #scene_content = generate_scene_from_theme(scene)
 
         # Create a simplified DALL·E prompt from the scene
-        prompt = create_simplified_image_prompt(scene_content)
+        prompt = create_simplified_image_prompt(scene)
 
         # Generate the image URL using chatty_core
         generated_url = generate_image(prompt, max_length=MAX_PROMPT_LENGTH_TELEGRAM)

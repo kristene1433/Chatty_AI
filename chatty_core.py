@@ -517,8 +517,14 @@ def create_simplified_image_prompt(text_content):
 )
 
 
-        if "environment" not in text_content.lower():
-            text_content += " Depict Chatty standing cheerfully in a detailed pixel-art environment with vibrant scenery and bright lighting."
+        if "chatty" not in text_content.lower():
+            text_content = "Chatty at the " + text_content
+
+        text_content += (
+            ". Depict Chatty in a Studio Ghibli-like cartoon style at the beach (or the user-defined location), "
+            "with nostalgic warm lighting, soft hand-drawn textures, and painterly pixel-art details. "
+            "Do not include any text or logos."
+)
 
         user_request = (
             f"Scene Concept: {text_content}\n\n"
